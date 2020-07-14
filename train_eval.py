@@ -394,6 +394,7 @@ CONFIG_DEVICE = "device"
 @click_config_file.configuration_option(implicit=True, config_file_name="config")
 def train(**kwargs):
     config = kwargs
+
     config[CONFIG_DATASET_MALIGNANT_256] = Path(config[CONFIG_DATASET_MALIGNANT_256])
 
     tqdm.pandas()
@@ -402,8 +403,8 @@ def train(**kwargs):
     seed = 1234
     seed_everything(seed)
 
-    if "device" not in config:
-        config['device'] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not config.get(CONFIG_DEVICE):
+        config[CONFIG_DEVICE] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         # check device available
         tmp_tensor = torch.rand(1).to(config['device'])
