@@ -205,19 +205,19 @@ def train_model(train_df, test_df, meta_features):
     lr_patience = 1  # patience for learning rate
     lr_factor = 0.4
     epochs = 10  # no of times till the loop will iterate over the model
-    num_workers = 24  # tells DataLoader the number of subprocess to use while data loading
+    num_workers = 8  # tells DataLoader the number of subprocess to use while data loading
 
     train_len = len(train_df)
     test_len = len(test_df)
     oof = np.zeros(shape=(train_len, 1))
 
-    for fold, (train_idx, val_idx) in enumerate(
+    for fold_idx, (train_idx, val_idx) in enumerate(
             skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
-        print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold, Style.RESET_ALL, Fore.CYAN, '-' * 20,
+        print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN, '-' * 20,
               Style.RESET_ALL)
         best_val = None
         patience = ESpatience  # Best validation score within this fold
-        model_path = 'model{Fold}.pth'.format(Fold=fold)
+        model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
         train = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
                                 imfolder='../kaggle-datasource/melanoma-external-malignant-256/train/train/',
                                 train=True,
@@ -228,12 +228,14 @@ def train_model(train_df, test_df, meta_features):
                               train=True,
                               transforms=test_transform,
                               meta_features=meta_features)
-        train_loader = DataLoader(dataset=train, batch_size=batch_size1, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(dataset=val, batch_size=batch_size2, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(dataset=test, batch_size=batch_size2, shuffle=False, num_workers=num_workers)
+        train_loader = DataLoader(dataset=train, batch_size=batch_size1, shuffle=True, num_workers=num_workers, pin_memory=True)
+        val_loader = DataLoader(dataset=val, batch_size=batch_size2, shuffle=False, num_workers=num_workers, pin_memory=True)
+        test_loader = DataLoader(dataset=test, batch_size=batch_size2, shuffle=False, num_workers=num_workers, pin_memory=True)
 
         model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b2=True)
         model = model.to(device)
+
+        criterion = nn.BCEWithLogitsLoss()
 
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max',
@@ -250,8 +252,6 @@ def train_model(train_df, test_df, meta_features):
                 data[0] = torch.tensor(data[0], device=device, dtype=torch.float32)
                 data[1] = torch.tensor(data[1], device=device, dtype=torch.float32)
                 labels = torch.tensor(labels, device=device, dtype=torch.float32)
-
-                criterion = nn.BCEWithLogitsLoss()
 
                 # Clear gradients first; very important, usually done BEFORE prediction
                 optimizer.zero_grad()
