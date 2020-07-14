@@ -11,30 +11,25 @@ import cv2
 import pandas as pd
 import numpy as np
 
-from colorama import Fore, Back, Style
+from colorama import Fore, Style
 
 import click
 import click_config_file
 
 from tqdm.auto import tqdm, trange
 
-from sklearn import metrics
-from sklearn.utils import shuffle
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import StratifiedKFold, GroupKFold
+from sklearn.model_selection import GroupKFold
 from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn import preprocessing
 
 # PyTorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import FloatTensor, LongTensor
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torchtoolbox.transform as transforms
 
-from torch.multiprocessing import Pool, Process, set_start_method
+from torch.multiprocessing import set_start_method
 
 from efficientnet_pytorch import EfficientNet
 
@@ -53,7 +48,7 @@ click.get_app_dir = get_app_dir
 TEST_PATH = "../kaggle/test.csv"
 
 
-def signal_handler(sig, frame):
+def signal_handler(_sig, _frame):
     print('You pressed Ctrl+C!')
     sys.exit(0)
 
@@ -68,19 +63,23 @@ def seed_everything(seed_value):
     os.environ['PYTHONHASHSEED'] = str(seed_value)
 
     if torch.cuda.is_available():
+        # noinspection PyUnresolvedReferences
         torch.cuda.manual_seed(seed_value)
+        # noinspection PyUnresolvedReferences
         torch.cuda.manual_seed_all(seed_value)
+        # noinspection PyUnresolvedReferences
         torch.backends.cudnn.deterministic = True
+        # noinspection PyUnresolvedReferences
         torch.backends.cudnn.benchmark = True
 
 
 class MelanomaDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, imfolder: str, train: bool = True, transforms=None, meta_features=None):
+    def __init__(self, df: pd.DataFrame, imfolder: str, is_train: bool = True, transforms=None, meta_features=None):
 
         self.df = df
         self.imfolder = imfolder
         self.transforms = transforms
-        self.train = train
+        self.is_train = is_train
         self.meta_features = meta_features
 
     def __getitem__(self, index):
@@ -91,7 +90,7 @@ class MelanomaDataset(Dataset):
         if self.transforms:
             image = self.transforms(image)
 
-        if self.train:
+        if self.is_train:
             y = self.df.iloc[index]['target']
             #             image = image.cuda()
             return (image, metadata), y
@@ -144,12 +143,15 @@ class EfficientNetwork(nn.Module):
 
     def forward(self, image, csv_data, prints=False):
 
-        if prints: print('Input Image shape:', image.shape, '\n' +
-                         'Input csv_data shape:', csv_data.shape)
+        if prints:
+            print('Input Image shape:', image.shape, '\n' +
+                  'Input csv_data shape:', csv_data.shape)
 
         # IMAGE CNN
         image = self.features.extract_features(image)
-        if prints: print('Features Image shape:', image.shape)
+
+        if prints:
+            print('Features Image shape:', image.shape)
 
         if self.b4:
             image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 1792)
@@ -157,18 +159,21 @@ class EfficientNetwork(nn.Module):
             image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 1408)
         else:
             image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 2560)
-        if prints: print('Image Reshaped shape:', image.shape)
+        if prints:
+            print('Image Reshaped shape:', image.shape)
 
         # CSV FNN
         csv_data = self.csv(csv_data)
-        if prints: print('CSV Data:', csv_data.shape)
+        if prints:
+            print('CSV Data:', csv_data.shape)
 
         # Concatenate
         image_csv_data = torch.cat((image, csv_data), dim=1)
 
         # CLASSIF
         out = self.classification(image_csv_data)
-        if prints: print('Out shape:', out.shape)
+        if prints:
+            print('Out shape:', out.shape)
 
         return out
 
@@ -209,17 +214,8 @@ def load_dataset():
     return train_df, test_df, meta_features
 
 
-def train_model(train_df, test_df, meta_features, config):
-    batch_size1 = 64
-    batch_size2 = 32
-    ESpatience = 3  # no of times the model will wait if the loss is not decreased
+def train_model(train_df, meta_features, config):
     output_size = 1  # statics
-    learning_rate = 0.001  # Learning Rate
-    weight_decay = 0.0  # Decay Factor
-    lr_patience = 1  # patience for learning rate
-    lr_factor = 0.4
-    epochs = 10  # no of times till the loop will iterate over the model
-    num_workers = 8  # tells DataLoader the number of subprocess to use while data loading
 
     train_transform = transforms.Compose([
         #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
@@ -239,7 +235,6 @@ def train_model(train_df, test_df, meta_features, config):
     skf = GroupKFold(n_splits=5)
 
     train_len = len(train_df)
-    test_len = len(test_df)
     oof = np.zeros(shape=(train_len, 1))
 
     for fold_idx, (train_idx, val_idx) in enumerate(
@@ -248,34 +243,41 @@ def train_model(train_df, test_df, meta_features, config):
               '-' * 20,
               Style.RESET_ALL)
         best_val = None
-        patience = ESpatience  # Best validation score within this fold
+        patience = config[CONFIG_PATIENCE]  # Best validation score within this fold
         model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
-        train = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
-                                imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
-                                train=True,
-                                transforms=train_transform,
-                                meta_features=meta_features)
+        train_dataset = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
+                                        imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
+                                        is_train=True,
+                                        transforms=train_transform,
+                                        meta_features=meta_features)
         val = MelanomaDataset(df=train_df.iloc[val_idx].reset_index(drop=True),
                               imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
-                              train=True,
+                              is_train=True,
                               transforms=test_transform,
                               meta_features=meta_features)
-        train_loader = DataLoader(dataset=train, batch_size=batch_size1, shuffle=True, num_workers=num_workers,
+        train_loader = DataLoader(dataset=train_dataset,
+                                  batch_size=config[CONFIG_BATCH_SIZE],
+                                  shuffle=True,
+                                  num_workers=config[CONFIG_NUM_WORKERS],
                                   pin_memory=True)
-        val_loader = DataLoader(dataset=val, batch_size=batch_size2, shuffle=False, num_workers=num_workers,
+        val_loader = DataLoader(dataset=val,
+                                batch_size=config[CONFIG_BATCH_SIZE],
+                                shuffle=False,
+                                num_workers=config[CONFIG_NUM_WORKERS],
                                 pin_memory=True)
-        # test_loader = DataLoader(dataset=test, batch_size=batch_size2, shuffle=False, num_workers=num_workers,
-        #                          pin_memory=True)
 
         model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b2=True)
         model = model.to(config[CONFIG_DEVICE])
 
         criterion = nn.BCEWithLogitsLoss()
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-        scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max',
-                                      patience=lr_patience, verbose=True, factor=lr_factor)
-        for epoch in trange(epochs, desc='Epoch'):
+        optimizer = torch.optim.Adam(model.parameters(), lr=config[CONFIG_LR], weight_decay=config[CONFIG_DECAY])
+        scheduler = ReduceLROnPlateau(optimizer=optimizer,
+                                      mode='max',
+                                      patience=config[CONFIG_LR_PATIENCE],
+                                      verbose=True,
+                                      factor=config[CONFIG_LR_FACTOR])
+        for epoch in trange(config[CONFIG_EPOCHES], desc='Epoch'):
             start_time = time.time()
             correct = 0
             train_losses = 0
@@ -283,7 +285,6 @@ def train_model(train_df, test_df, meta_features, config):
             model.train()  # Set the model in train mode
 
             for data, labels in tqdm(train_loader, desc='Batch', leave=False):
-                # Save them to device
                 data[0] = torch.tensor(data[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
                 data[1] = torch.tensor(data[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
                 labels = torch.tensor(labels, device=config[CONFIG_DEVICE], dtype=torch.float32)
@@ -389,7 +390,8 @@ CONFIG_DEVICE = "device"
 @click.option('--' + CONFIG_DECAY, default=0.0, help='Decay Factor')
 @click.option('--' + CONFIG_LR_FACTOR, default=0.4, help='')
 @click.option('--' + CONFIG_NUM_WORKERS, default=0, help='number of subprocess to use while data loading')
-@click.option('--' + CONFIG_DATASET_MALIGNANT_256, help='path to external malignant-256 dataset', type=click.Path(exists=True))
+@click.option('--' + CONFIG_DATASET_MALIGNANT_256, help='path to external malignant-256 dataset',
+              type=click.Path(exists=True))
 @click.option('--' + CONFIG_DEVICE, help='device: cpu, cuda, cuda:1')
 @click_config_file.configuration_option(implicit=True, config_file_name="config")
 def train(**kwargs):
@@ -417,9 +419,8 @@ def train(**kwargs):
     except RuntimeError:
         pass
 
-    train_model(train_df=train_df, test_df=test_df, meta_features=meta_features, config=config)
+    train_model(train_df=train_df, meta_features=meta_features, config=config)
 
 
 if __name__ == '__main__':
-    # click.get_app_dir(cmd_name)
     cli()
