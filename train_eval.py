@@ -5,12 +5,16 @@ import datetime
 
 import signal
 import sys
+from pathlib import Path
 
 import cv2
 import pandas as pd
 import numpy as np
 
 from colorama import Fore, Back, Style
+
+import click
+import click_config_file
 
 from tqdm.auto import tqdm, trange
 
@@ -35,6 +39,16 @@ from torch.multiprocessing import Pool, Process, set_start_method
 from efficientnet_pytorch import EfficientNet
 
 import warnings
+
+
+# monkey patch for click START
+def get_app_dir(_unused):
+    return "."
+
+
+click.get_app_dir = get_app_dir
+# monkey patch END
+
 
 TEST_PATH = "../kaggle/test.csv"
 
@@ -195,7 +209,7 @@ def load_dataset():
     return train_df, test_df, meta_features
 
 
-def train_model(train_df, test_df, meta_features):
+def train_model(train_df, test_df, meta_features, config):
     batch_size1 = 64
     batch_size2 = 32
     ESpatience = 3  # no of times the model will wait if the loss is not decreased
@@ -207,33 +221,54 @@ def train_model(train_df, test_df, meta_features):
     epochs = 10  # no of times till the loop will iterate over the model
     num_workers = 8  # tells DataLoader the number of subprocess to use while data loading
 
+    train_transform = transforms.Compose([
+        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
+        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.ColorJitter(brightness=32. / 255., saturation=0.5, hue=0.01),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    test_transform = transforms.Compose([
+        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    skf = GroupKFold(n_splits=5)
+
     train_len = len(train_df)
     test_len = len(test_df)
     oof = np.zeros(shape=(train_len, 1))
 
     for fold_idx, (train_idx, val_idx) in enumerate(
             skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
-        print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN, '-' * 20,
+        print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN,
+              '-' * 20,
               Style.RESET_ALL)
         best_val = None
         patience = ESpatience  # Best validation score within this fold
         model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
         train = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
-                                imfolder='../kaggle-datasource/melanoma-external-malignant-256/train/train/',
+                                imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
                                 train=True,
                                 transforms=train_transform,
                                 meta_features=meta_features)
         val = MelanomaDataset(df=train_df.iloc[val_idx].reset_index(drop=True),
-                              imfolder='../kaggle-datasource/melanoma-external-malignant-256/train/train/',
+                              imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
                               train=True,
                               transforms=test_transform,
                               meta_features=meta_features)
-        train_loader = DataLoader(dataset=train, batch_size=batch_size1, shuffle=True, num_workers=num_workers, pin_memory=True)
-        val_loader = DataLoader(dataset=val, batch_size=batch_size2, shuffle=False, num_workers=num_workers, pin_memory=True)
-        test_loader = DataLoader(dataset=test, batch_size=batch_size2, shuffle=False, num_workers=num_workers, pin_memory=True)
+        train_loader = DataLoader(dataset=train, batch_size=batch_size1, shuffle=True, num_workers=num_workers,
+                                  pin_memory=True)
+        val_loader = DataLoader(dataset=val, batch_size=batch_size2, shuffle=False, num_workers=num_workers,
+                                pin_memory=True)
+        # test_loader = DataLoader(dataset=test, batch_size=batch_size2, shuffle=False, num_workers=num_workers,
+        #                          pin_memory=True)
 
         model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b2=True)
-        model = model.to(device)
+        model = model.to(config[CONFIG_DEVICE])
 
         criterion = nn.BCEWithLogitsLoss()
 
@@ -249,9 +284,9 @@ def train_model(train_df, test_df, meta_features):
 
             for data, labels in tqdm(train_loader, desc='Batch', leave=False):
                 # Save them to device
-                data[0] = torch.tensor(data[0], device=device, dtype=torch.float32)
-                data[1] = torch.tensor(data[1], device=device, dtype=torch.float32)
-                labels = torch.tensor(labels, device=device, dtype=torch.float32)
+                data[0] = torch.tensor(data[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                data[1] = torch.tensor(data[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                labels = torch.tensor(labels, device=config[CONFIG_DEVICE], dtype=torch.float32)
 
                 # Clear gradients first; very important, usually done BEFORE prediction
                 optimizer.zero_grad()
@@ -275,13 +310,13 @@ def train_model(train_df, test_df, meta_features):
             # Compute Train Accuracy
             train_acc = correct / len(train_idx)
             model.eval()  # switch model to the evaluation mode
-            val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=device)
+            val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config[CONFIG_DEVICE])
             with torch.no_grad():  # Do not calculate gradient since we are only predicting
 
                 for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
-                    data_val[0] = torch.tensor(data_val[0], device=device, dtype=torch.float32)
-                    data_val[1] = torch.tensor(data_val[1], device=device, dtype=torch.float32)
-                    label_val = torch.tensor(label_val, device=device, dtype=torch.float32)
+                    data_val[0] = torch.tensor(data_val[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                    data_val[1] = torch.tensor(data_val[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                    label_val = torch.tensor(label_val, device=config[CONFIG_DEVICE], dtype=torch.float32)
                     z_val = model(data_val[0], data_val[1])
                     val_pred = torch.sigmoid(z_val)
                     val_preds[j * data_val[0].shape[0]:j * data_val[0].shape[0] + data_val[0].shape[0]] = val_pred
@@ -315,55 +350,75 @@ def train_model(train_df, test_df, meta_features):
 
         model = torch.load(model_path)  # Loading best model of this fold
         model.eval()  # switch model to the evaluation mode
-        val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=device)
+        val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config[CONFIG_DEVICE])
         with torch.no_grad():
             # Predicting on validation set once again to obtain data for OOF
             for j, (x_val, y_val) in enumerate(val_loader):
-                x_val[0] = torch.tensor(x_val[0], device=device, dtype=torch.float32)
-                x_val[1] = torch.tensor(x_val[1], device=device, dtype=torch.float32)
-                y_val = torch.tensor(y_val, device=device, dtype=torch.float32)
+                x_val[0] = torch.tensor(x_val[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                x_val[1] = torch.tensor(x_val[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
+                y_val = torch.tensor(y_val, device=config[CONFIG_DEVICE], dtype=torch.float32)
                 z_val = model(x_val[0], x_val[1])
                 val_pred = torch.sigmoid(z_val)
                 val_preds[j * x_val[0].shape[0]:j * x_val[0].shape[0] + x_val[0].shape[0]] = val_pred
             oof[val_idx] = val_preds.cpu().numpy()
 
 
-if __name__ == "__main__":
+@click.group()
+def cli():
+    pass
+
+
+CONFIG_EPOCHES = "epochs"
+CONFIG_BATCH_SIZE = "batch_size"
+CONFIG_PATIENCE = "patience"
+CONFIG_LR_PATIENCE = "lr_patience"
+CONFIG_LR = "learning_rate"
+CONFIG_DECAY = "weight_decay"
+CONFIG_LR_FACTOR = "lr_factor"
+CONFIG_NUM_WORKERS = "num_workers"
+CONFIG_DATASET_MALIGNANT_256 = "dataset_malignant_256"
+CONFIG_DEVICE = "device"
+
+
+@cli.command()
+@click.option('--' + CONFIG_EPOCHES, default=10, help='Number of epoches for training.')
+@click.option('--' + CONFIG_BATCH_SIZE, default=64, help='Train batch size.')
+@click.option('--' + CONFIG_PATIENCE, default=3, help='early stopping patience')
+@click.option('--' + CONFIG_LR_PATIENCE, default=1, help='patience for learning rate')
+@click.option('--' + CONFIG_LR, default=0.001, help='Learning Rate')
+@click.option('--' + CONFIG_DECAY, default=0.0, help='Decay Factor')
+@click.option('--' + CONFIG_LR_FACTOR, default=0.4, help='')
+@click.option('--' + CONFIG_NUM_WORKERS, default=0, help='number of subprocess to use while data loading')
+@click.option('--' + CONFIG_DATASET_MALIGNANT_256, help='path to external malignant-256 dataset', type=click.Path(exists=True))
+@click.option('--' + CONFIG_DEVICE, help='device: cpu, cuda, cuda:1')
+@click_config_file.configuration_option(implicit=True, config_file_name="config")
+def train(**kwargs):
+    config = kwargs
+    config[CONFIG_DATASET_MALIGNANT_256] = Path(config[CONFIG_DATASET_MALIGNANT_256])
+
     tqdm.pandas()
     warnings.filterwarnings("ignore")
 
     seed = 1234
     seed_everything(seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if "device" not in config:
+        config['device'] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        # check device available
+        tmp_tensor = torch.rand(1).to(config['device'])
+        del tmp_tensor
 
     train_df, test_df, meta_features = load_dataset()
-
-    train_transform = transforms.Compose([
-        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
-        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=32. / 255., saturation=0.5, hue=0.01),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    test_transform = transforms.Compose([
-        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    skf = GroupKFold(n_splits=5)
-    test = MelanomaDataset(df=test_df,
-                           imfolder='../kaggle-datasource/melanoma-external-malignant-256/test/test/',
-                           train=False,
-                           transforms=test_transform,
-                           meta_features=meta_features)
 
     try:
         set_start_method('spawn')
     except RuntimeError:
         pass
 
-    train_model(train_df, test_df, meta_features)
+    train_model(train_df=train_df, test_df=test_df, meta_features=meta_features, config=config)
+
+
+if __name__ == '__main__':
+    # click.get_app_dir(cmd_name)
+    cli()
