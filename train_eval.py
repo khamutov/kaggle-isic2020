@@ -5,8 +5,8 @@ import datetime
 
 import signal
 import sys
-from pathlib import Path
 
+import configobj
 import cv2
 import mlflow
 import pandas as pd
@@ -15,7 +15,6 @@ import numpy as np
 from colorama import Fore, Style
 
 import click
-import click_config_file
 
 from tqdm.auto import tqdm, trange
 
@@ -36,15 +35,7 @@ from efficientnet_pytorch import EfficientNet
 
 import warnings
 
-
-# monkey patch for click START
-def get_app_dir(_unused):
-    return "."
-
-
-click.get_app_dir = get_app_dir
-# monkey patch END
-
+import cli
 
 TEST_PATH = "../kaggle/test.csv"
 
@@ -179,8 +170,8 @@ class EfficientNetwork(nn.Module):
         return out
 
 
-def load_dataset():
-    train_df = pd.read_csv('../kaggle-datasource/melanoma-external-malignant-256/train_concat.csv')
+def load_dataset(config: cli.RunOptions):
+    train_df = pd.read_csv(config.dataset_malignant_256 / 'train_concat.csv')
     test_df = pd.read_csv(TEST_PATH)
 
     train_df['sex'] = train_df['sex'].map({'male': 1, 'female': 0})
@@ -216,8 +207,6 @@ def load_dataset():
 
 
 def train_model(train_df, meta_features, config):
-    track_mlflow = config[CONFIG_MLFLOW_TRACKING_URL] is not None and len(config[CONFIG_MLFLOW_TRACKING_URL]) > 0
-
     output_size = 1  # statics
 
     train_transform = transforms.Compose([
@@ -243,7 +232,7 @@ def train_model(train_df, meta_features, config):
     for fold_idx, (train_idx, val_idx) in enumerate(
             skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
 
-        if track_mlflow:
+        if config.is_track_mlflow():
             mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
             mlflow.log_param("fold", fold_idx)
 
@@ -251,41 +240,41 @@ def train_model(train_df, meta_features, config):
               '-' * 20,
               Style.RESET_ALL)
         best_val = None
-        patience = config[CONFIG_PATIENCE]  # Best validation score within this fold
+        patience = config.patience  # Best validation score within this fold
         model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
         train_dataset = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
-                                        imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
+                                        imfolder=config.dataset_malignant_256 / 'train/train/',
                                         is_train=True,
                                         transforms=train_transform,
                                         meta_features=meta_features)
         val = MelanomaDataset(df=train_df.iloc[val_idx].reset_index(drop=True),
-                              imfolder=config[CONFIG_DATASET_MALIGNANT_256] / 'train/train/',
+                              imfolder=config.dataset_malignant_256 / 'train/train/',
                               is_train=True,
                               transforms=test_transform,
                               meta_features=meta_features)
         train_loader = DataLoader(dataset=train_dataset,
-                                  batch_size=config[CONFIG_BATCH_SIZE],
+                                  batch_size=config.batch_size,
                                   shuffle=True,
-                                  num_workers=config[CONFIG_NUM_WORKERS],
+                                  num_workers=config.num_workers,
                                   pin_memory=True)
         val_loader = DataLoader(dataset=val,
-                                batch_size=config[CONFIG_BATCH_SIZE],
+                                batch_size=config.batch_size,
                                 shuffle=False,
-                                num_workers=config[CONFIG_NUM_WORKERS],
+                                num_workers=config.num_workers,
                                 pin_memory=True)
 
         model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b2=True)
-        model = model.to(config[CONFIG_DEVICE])
+        model = model.to(config.device)
 
         criterion = nn.BCEWithLogitsLoss()
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=config[CONFIG_LR], weight_decay=config[CONFIG_DECAY])
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         scheduler = ReduceLROnPlateau(optimizer=optimizer,
                                       mode='max',
-                                      patience=config[CONFIG_LR_PATIENCE],
+                                      patience=config.patience,
                                       verbose=True,
-                                      factor=config[CONFIG_LR_FACTOR])
-        for epoch in trange(config[CONFIG_EPOCHES], desc='Epoch'):
+                                      factor=config.lr_factor)
+        for epoch in trange(config.epochs, desc='Epoch'):
             start_time = time.time()
             correct = 0
             train_losses = 0
@@ -293,9 +282,9 @@ def train_model(train_df, meta_features, config):
             model.train()  # Set the model in train mode
 
             for data, labels in tqdm(train_loader, desc='Batch', leave=False):
-                data[0] = torch.tensor(data[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                data[1] = torch.tensor(data[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                labels = torch.tensor(labels, device=config[CONFIG_DEVICE], dtype=torch.float32)
+                data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
+                data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
+                labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
 
                 # Clear gradients first; very important, usually done BEFORE prediction
                 optimizer.zero_grad()
@@ -319,13 +308,13 @@ def train_model(train_df, meta_features, config):
             # Compute Train Accuracy
             train_acc = correct / len(train_idx)
             model.eval()  # switch model to the evaluation mode
-            val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config[CONFIG_DEVICE])
+            val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config.device)
             with torch.no_grad():  # Do not calculate gradient since we are only predicting
 
                 for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
-                    data_val[0] = torch.tensor(data_val[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                    data_val[1] = torch.tensor(data_val[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                    label_val = torch.tensor(label_val, device=config[CONFIG_DEVICE], dtype=torch.float32)
+                    data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
+                    data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
+                    label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
                     z_val = model(data_val[0], data_val[1])
                     val_pred = torch.sigmoid(z_val)
                     val_preds[j * data_val[0].shape[0]:j * data_val[0].shape[0] + data_val[0].shape[0]] = val_pred
@@ -340,7 +329,7 @@ def train_model(train_df, meta_features, config):
                       '|', Fore.YELLOW, ' Training time:', Style.RESET_ALL,
                       str(datetime.timedelta(seconds=time.time() - start_time)))
 
-                if track_mlflow:
+                if config.is_track_mlflow():
                     mlflow.log_metric("train_loss", train_losses, step=epoch)
                     mlflow.log_metric("train_acc", train_acc, step=epoch)
                     mlflow.log_metric("val_acc", val_acc, step=epoch)
@@ -365,92 +354,46 @@ def train_model(train_df, meta_features, config):
 
         model = torch.load(model_path)  # Loading best model of this fold
         model.eval()  # switch model to the evaluation mode
-        val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config[CONFIG_DEVICE])
+        val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config.device)
         with torch.no_grad():
             # Predicting on validation set once again to obtain data for OOF
             for j, (x_val, y_val) in enumerate(val_loader):
-                x_val[0] = torch.tensor(x_val[0], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                x_val[1] = torch.tensor(x_val[1], device=config[CONFIG_DEVICE], dtype=torch.float32)
-                y_val = torch.tensor(y_val, device=config[CONFIG_DEVICE], dtype=torch.float32)
+                x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
+                x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
+                y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
                 z_val = model(x_val[0], x_val[1])
                 val_pred = torch.sigmoid(z_val)
                 val_preds[j * x_val[0].shape[0]:j * x_val[0].shape[0] + x_val[0].shape[0]] = val_pred
             oof[val_idx] = val_preds.cpu().numpy()
 
-        if track_mlflow:
+        if config.is_track_mlflow():
             mlflow.log_metric("best_roc_auc", best_val)
             mlflow.end_run()
 
 
-@click.group()
-def cli():
-    pass
-
-
-CONFIG_EPOCHES = "epochs"
-CONFIG_BATCH_SIZE = "batch_size"
-CONFIG_PATIENCE = "patience"
-CONFIG_LR_PATIENCE = "lr_patience"
-CONFIG_LR = "learning_rate"
-CONFIG_DECAY = "weight_decay"
-CONFIG_LR_FACTOR = "lr_factor"
-CONFIG_NUM_WORKERS = "num_workers"
-CONFIG_DATASET_MALIGNANT_256 = "dataset_malignant_256"
-CONFIG_DEVICE = "device"
-CONFIG_MLFLOW_TRACKING_URL = "mlflow_tracking_url"
-CONFIG_MLFLOW_EXPERIMENT = "mlflow_experiment"
-CONFIG_DRY_RUN = "dry_run"
-
-@cli.command()
-@click.option('--' + CONFIG_EPOCHES, default=10, help='Number of epoches for training.')
-@click.option('--' + CONFIG_BATCH_SIZE, default=64, help='Train batch size.')
-@click.option('--' + CONFIG_PATIENCE, default=3, help='early stopping patience')
-@click.option('--' + CONFIG_LR_PATIENCE, default=1, help='patience for learning rate')
-@click.option('--' + CONFIG_LR, default=0.001, help='Learning Rate')
-@click.option('--' + CONFIG_DECAY, default=0.0, help='Decay Factor')
-@click.option('--' + CONFIG_LR_FACTOR, default=0.4, help='')
-@click.option('--' + CONFIG_NUM_WORKERS, default=0, help='number of subprocess to use while data loading')
-@click.option('--' + CONFIG_DATASET_MALIGNANT_256, help='path to external malignant-256 dataset',
-              type=click.Path(exists=True))
-@click.option('--' + CONFIG_MLFLOW_TRACKING_URL, help='mlflow tracking url')
-@click.option('--' + CONFIG_MLFLOW_EXPERIMENT, help='mlflow tracking url')
-@click.option('--' + CONFIG_DEVICE, help='device: cpu, cuda, cuda:1')
-@click.option('--dry-run', is_flag=True, help='run train on small set, do not track in MLflow. For sanity check only.')
-@click_config_file.configuration_option(implicit=True, config_file_name="config")
-def train(**kwargs):
-    config = kwargs
-
-    config[CONFIG_DATASET_MALIGNANT_256] = Path(config[CONFIG_DATASET_MALIGNANT_256])
-
+def train_cmd(config: cli.RunOptions):
     tqdm.pandas()
     warnings.filterwarnings("ignore")
 
     seed = 1234
     seed_everything(seed)
 
-    if not config.get(CONFIG_DEVICE):
-        config[CONFIG_DEVICE] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        # check device available
-        tmp_tensor = torch.rand(1).to(config['device'])
-        del tmp_tensor
+    # check device available
+    _tmp_tensor = torch.rand(1).to(config.device)
+    del _tmp_tensor
 
-    if config[CONFIG_DRY_RUN]:
-        config[CONFIG_MLFLOW_TRACKING_URL] = ""
+    if config.is_track_mlflow():
+        if not config.mlflow_experiment:
+            raise Exception("mlflow experiment not set! Use option --mlflow_experiment")
 
-    if config[CONFIG_MLFLOW_TRACKING_URL] and len(config[CONFIG_MLFLOW_TRACKING_URL]) > 0:
-        experiment_id = config[CONFIG_MLFLOW_EXPERIMENT]
-        if not experiment_id:
-            raise Exception("mlflow experiment not set! Use option --" + CONFIG_MLFLOW_EXPERIMENT)
-
-        mlflow.set_tracking_uri(config[CONFIG_MLFLOW_TRACKING_URL])
-        mlflow.set_experiment(experiment_id)
+        mlflow.set_tracking_uri(config.mlflow_tracking_url)
+        mlflow.set_experiment(config.mlflow_experiment)
 
         mlflow.log_params(config)
 
-    train_df, test_df, meta_features = load_dataset()
+    train_df, test_df, meta_features = load_dataset(config)
 
-    if config[CONFIG_DRY_RUN]:
+    if config.dry_run:
         train_df = train_df.head(640)
 
     try:
@@ -461,5 +404,42 @@ def train(**kwargs):
     train_model(train_df=train_df, meta_features=meta_features, config=config)
 
 
+class CommanCLI(click.MultiCommand):
+
+    def list_commands(self, ctx):
+        rv = ['train']
+        rv.sort()
+        return rv
+
+    def get_command(self, ctx, name):
+        config = configobj.ConfigObj("config", unrepr=True)
+        params = list()
+        for opt in cli.options:
+            click_opt = click.Option(("--" + opt.name,),
+                                     default=config.get(opt.name, opt.default),
+                                     help=opt.desc,
+                                     is_flag=opt.is_flag,
+                                     type=opt.type,
+                                     callback=opt.callback)
+            params.append(click_opt)
+
+        @click.pass_context
+        def train_callback(*_args, **kwargs):
+            run_options = cli.RunOptions()
+
+            for key, val in kwargs.items():
+                run_options.__setattr__(key, val)
+            train_cmd(run_options)
+
+        ret = click.Command(name, params=params, callback=train_callback)
+        return ret
+
+
+@click.command(cls=CommanCLI)
+@click.pass_context
+def run(_ctx, *_args, **_kwargs):
+    pass
+
+
 if __name__ == '__main__':
-    cli()
+    run()
