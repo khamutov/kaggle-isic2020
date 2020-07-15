@@ -399,7 +399,7 @@ CONFIG_DATASET_MALIGNANT_256 = "dataset_malignant_256"
 CONFIG_DEVICE = "device"
 CONFIG_MLFLOW_TRACKING_URL = "mlflow_tracking_url"
 CONFIG_MLFLOW_EXPERIMENT = "mlflow_experiment"
-
+CONFIG_DRY_RUN = "dry_run"
 
 @cli.command()
 @click.option('--' + CONFIG_EPOCHES, default=10, help='Number of epoches for training.')
@@ -415,6 +415,7 @@ CONFIG_MLFLOW_EXPERIMENT = "mlflow_experiment"
 @click.option('--' + CONFIG_MLFLOW_TRACKING_URL, help='mlflow tracking url')
 @click.option('--' + CONFIG_MLFLOW_EXPERIMENT, help='mlflow tracking url')
 @click.option('--' + CONFIG_DEVICE, help='device: cpu, cuda, cuda:1')
+@click.option('--dry-run', is_flag=True, help='run train on small set, do not track in MLflow. For sanity check only.')
 @click_config_file.configuration_option(implicit=True, config_file_name="config")
 def train(**kwargs):
     config = kwargs
@@ -434,6 +435,9 @@ def train(**kwargs):
         tmp_tensor = torch.rand(1).to(config['device'])
         del tmp_tensor
 
+    if config[CONFIG_DRY_RUN]:
+        config[CONFIG_MLFLOW_TRACKING_URL] = ""
+
     if config[CONFIG_MLFLOW_TRACKING_URL] and len(config[CONFIG_MLFLOW_TRACKING_URL]) > 0:
         experiment_id = config[CONFIG_MLFLOW_EXPERIMENT]
         if not experiment_id:
@@ -445,6 +449,9 @@ def train(**kwargs):
         mlflow.log_params(config)
 
     train_df, test_df, meta_features = load_dataset()
+
+    if config[CONFIG_DRY_RUN]:
+        train_df = train_df.head(640)
 
     try:
         set_start_method('spawn')
