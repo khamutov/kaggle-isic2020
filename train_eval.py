@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import mlflow
 import pandas as pd
 import numpy as np
 
@@ -215,6 +216,8 @@ def load_dataset():
 
 
 def train_model(train_df, meta_features, config):
+    track_mlflow = config[CONFIG_MLFLOW_TRACKING_URL] is not None and len(config[CONFIG_MLFLOW_TRACKING_URL]) > 0
+
     output_size = 1  # statics
 
     train_transform = transforms.Compose([
@@ -239,6 +242,11 @@ def train_model(train_df, meta_features, config):
 
     for fold_idx, (train_idx, val_idx) in enumerate(
             skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
+
+        if track_mlflow:
+            mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
+            mlflow.log_param("fold", fold_idx)
+
         print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN,
               '-' * 20,
               Style.RESET_ALL)
@@ -332,6 +340,12 @@ def train_model(train_df, meta_features, config):
                       '|', Fore.YELLOW, ' Training time:', Style.RESET_ALL,
                       str(datetime.timedelta(seconds=time.time() - start_time)))
 
+                if track_mlflow:
+                    mlflow.log_metric("train_loss", train_losses, step=epoch)
+                    mlflow.log_metric("train_acc", train_acc, step=epoch)
+                    mlflow.log_metric("val_acc", val_acc, step=epoch)
+                    mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
+
                 scheduler.step(val_roc)
                 # During the first iteration (first epoch) best validation is set to None
                 if not best_val:
@@ -363,6 +377,10 @@ def train_model(train_df, meta_features, config):
                 val_preds[j * x_val[0].shape[0]:j * x_val[0].shape[0] + x_val[0].shape[0]] = val_pred
             oof[val_idx] = val_preds.cpu().numpy()
 
+        if track_mlflow:
+            mlflow.log_metric("best_roc_auc", best_val)
+            mlflow.end_run()
+
 
 @click.group()
 def cli():
@@ -379,6 +397,8 @@ CONFIG_LR_FACTOR = "lr_factor"
 CONFIG_NUM_WORKERS = "num_workers"
 CONFIG_DATASET_MALIGNANT_256 = "dataset_malignant_256"
 CONFIG_DEVICE = "device"
+CONFIG_MLFLOW_TRACKING_URL = "mlflow_tracking_url"
+CONFIG_MLFLOW_EXPERIMENT = "mlflow_experiment"
 
 
 @cli.command()
@@ -392,6 +412,8 @@ CONFIG_DEVICE = "device"
 @click.option('--' + CONFIG_NUM_WORKERS, default=0, help='number of subprocess to use while data loading')
 @click.option('--' + CONFIG_DATASET_MALIGNANT_256, help='path to external malignant-256 dataset',
               type=click.Path(exists=True))
+@click.option('--' + CONFIG_MLFLOW_TRACKING_URL, help='mlflow tracking url')
+@click.option('--' + CONFIG_MLFLOW_EXPERIMENT, help='mlflow tracking url')
 @click.option('--' + CONFIG_DEVICE, help='device: cpu, cuda, cuda:1')
 @click_config_file.configuration_option(implicit=True, config_file_name="config")
 def train(**kwargs):
@@ -411,6 +433,16 @@ def train(**kwargs):
         # check device available
         tmp_tensor = torch.rand(1).to(config['device'])
         del tmp_tensor
+
+    if config[CONFIG_MLFLOW_TRACKING_URL] and len(config[CONFIG_MLFLOW_TRACKING_URL]) > 0:
+        experiment_id = config[CONFIG_MLFLOW_EXPERIMENT]
+        if not experiment_id:
+            raise Exception("mlflow experiment not set! Use option --" + CONFIG_MLFLOW_EXPERIMENT)
+
+        mlflow.set_tracking_uri(config[CONFIG_MLFLOW_TRACKING_URL])
+        mlflow.set_experiment(experiment_id)
+
+        mlflow.log_params(config)
 
     train_df, test_df, meta_features = load_dataset()
 
