@@ -39,9 +39,11 @@ options = [
     RunOption(name="lr_factor", default=0.4, desc=""),
     RunOption(name="num_workers", default=0, desc="num epoches"),
     RunOption(name="dataset_malignant_256", default=None, desc="path to external malignant-256 dataset").path(),
+    RunOption(name="dataset_official", default=None, desc="path to official ISIC dataset").path(),
     RunOption(name="mlflow_tracking_url", default=None, desc="mlflow tracking url"),
     RunOption(name="mlflow_experiment", default=None, desc="mlflow tracking url"),
     RunOption(name="device", default=None, desc="device: cpu, cuda, cuda:1"),
+    RunOption(name="tta", default=11, desc="test time augmentation steps"),
     RunOption(name="dry_run", default=False,
               desc="run train on small set, do not track in MLflow. For sanity check only.").flag(),
 ]
@@ -59,9 +61,11 @@ class RunOptions:
         self.lr_factor = None
         self.num_workers = None
         self.dataset_malignant_256: Union[None, Path] = None
+        self.dataset_official: Union[None, Path] = None
         self.mlflow_tracking_url = None
         self.mlflow_experiment = None
         self._device = None
+        self.tta = None
         self.dry_run = None
         for option in options:
             self.__setattr__(option.name, option.default)

@@ -37,8 +37,7 @@ import warnings
 
 import cli
 
-TEST_PATH = "../kaggle/test.csv"
-
+FOLDS = 5
 
 def signal_handler(_sig, _frame):
     print('You pressed Ctrl+C!')
@@ -172,7 +171,7 @@ class EfficientNetwork(nn.Module):
 
 def load_dataset(config: cli.RunOptions):
     train_df = pd.read_csv(config.dataset_malignant_256 / 'train_concat.csv')
-    test_df = pd.read_csv(TEST_PATH)
+    test_df = pd.read_csv(config.dataset_official / 'test.csv')
 
     train_df['sex'] = train_df['sex'].map({'male': 1, 'female': 0})
     test_df['sex'] = test_df['sex'].map({'male': 1, 'female': 0})
@@ -206,7 +205,7 @@ def load_dataset(config: cli.RunOptions):
     return train_df, test_df, meta_features
 
 
-def train_model(train_df, meta_features, config):
+def train_model(train_df, meta_features, config, test_transform):
     output_size = 1  # statics
 
     train_transform = transforms.Compose([
@@ -218,16 +217,15 @@ def train_model(train_df, meta_features, config):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
-    test_transform = transforms.Compose([
-        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
 
-    skf = GroupKFold(n_splits=5)
+    skf = GroupKFold(n_splits=FOLDS)
 
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
+    oof_pred = []
+    oof_target = []
+    oof_val = []
+    oof_folds = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(
             skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
@@ -308,7 +306,7 @@ def train_model(train_df, meta_features, config):
             # Compute Train Accuracy
             train_acc = correct / len(train_idx)
             model.eval()  # switch model to the evaluation mode
-            val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config.device)
+            val_pred_arr = []
             with torch.no_grad():  # Do not calculate gradient since we are only predicting
 
                 for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
@@ -317,9 +315,10 @@ def train_model(train_df, meta_features, config):
                     label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
                     z_val = model(data_val[0], data_val[1])
                     val_pred = torch.sigmoid(z_val)
-                    val_preds[j * data_val[0].shape[0]:j * data_val[0].shape[0] + data_val[0].shape[0]] = val_pred
-                val_acc = accuracy_score(train_df.iloc[val_idx]['target'].values, torch.round(val_preds.cpu()))
-                val_roc = roc_auc_score(train_df.iloc[val_idx]['target'].values, val_preds.cpu())
+                    val_pred_arr.append(val_pred.cpu().numpy())
+                val_preds = np.concatenate(val_pred_arr)
+                val_acc = accuracy_score(train_df.iloc[val_idx]['target'].values, np.round(val_preds))
+                val_roc = roc_auc_score(train_df.iloc[val_idx]['target'].values, val_preds)
 
                 epochval = epoch + 1
 
@@ -352,23 +351,87 @@ def train_model(train_df, meta_features, config):
                         print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
                         break
 
+        # val on best model
         model = torch.load(model_path)  # Loading best model of this fold
         model.eval()  # switch model to the evaluation mode
-        val_preds = torch.zeros((len(val_idx), 1), dtype=torch.float32, device=config.device)
+        val_pred_arr = []
         with torch.no_grad():
             # Predicting on validation set once again to obtain data for OOF
+            val_targets_arr = []
             for j, (x_val, y_val) in enumerate(val_loader):
                 x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
                 x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
                 y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
                 z_val = model(x_val[0], x_val[1])
                 val_pred = torch.sigmoid(z_val)
-                val_preds[j * x_val[0].shape[0]:j * x_val[0].shape[0] + x_val[0].shape[0]] = val_pred
-            oof[val_idx] = val_preds.cpu().numpy()
+                val_pred_arr.append(val_pred.cpu().numpy())
+                val_targets_arr.append(y_val.cpu().numpy())
+            val_preds = np.concatenate(val_pred_arr)
+            oof_pred.append(val_preds)
+            oof_target.append(np.concatenate(val_targets_arr))
+            oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
+            # oof[val_idx] = val_preds
 
         if config.is_track_mlflow():
             mlflow.log_metric("best_roc_auc", best_val)
             mlflow.end_run()
+
+    oof = np.concatenate(oof_pred).squeeze()
+    true = np.concatenate(oof_target)
+    folds = np.concatenate(oof_folds)
+    auc = roc_auc_score(true, oof)
+    names = train_df['image_name'].to_numpy()
+
+    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+    print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
+    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+
+    if config.is_track_mlflow():
+        mlflow.log_metric("oof_roc_auc", auc)
+
+    # SAVE OOF TO DISK
+    df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
+    df_oof.to_csv('oof.csv', index=False)
+
+
+def predict_model(test_df, meta_features, config: cli.RunOptions, test_transform):
+    print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
+
+    test = MelanomaDataset(df=test_df,
+                           imfolder=config.dataset_malignant_256 / 'test/test',
+                           is_train=False,
+                           transforms=test_transform,
+                           meta_features=meta_features)
+    test_loader = DataLoader(dataset=test,
+                             batch_size=config.batch_size,
+                             shuffle=False,
+                             num_workers=config.num_workers,
+                             pin_memory=True)
+
+    preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
+    for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
+        model = torch.load(f'model{fold_idx}.pth')
+        model.eval()  # switch model to the evaluation mode
+
+        fold_preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
+        with torch.no_grad():
+            for _ in trange(config.tta, desc='TTA', leave=False):
+                for i, x_test in enumerate(tqdm(test_loader, desc='Predict', leave=False)):
+                    x_test[0] = torch.tensor(x_test[0], device=config.device, dtype=torch.float32)
+                    x_test[1] = torch.tensor(x_test[1], device=config.device, dtype=torch.float32)
+                    z_test = model(x_test[0], x_test[1])
+                    z_test = torch.sigmoid(z_test)
+                    fold_preds[i * config.batch_size:i * config.batch_size + x_test[0].shape[0]] += z_test
+            fold_preds /= config.tta
+        preds += fold_preds
+
+    preds /= FOLDS
+
+    submission = pd.DataFrame(dict(image_name=test_df['image_name'].to_numpy(), target=preds.cpu().numpy()[:, 0]))
+    submission = submission.sort_values('image_name')
+    submission.to_csv('submission.csv', index=False)
+
+    print(Fore.MAGENTA, 'saved to submission.csv', Style.RESET_ALL)
 
 
 def train_cmd(config: cli.RunOptions):
@@ -389,7 +452,7 @@ def train_cmd(config: cli.RunOptions):
         mlflow.set_tracking_uri(config.mlflow_tracking_url)
         mlflow.set_experiment(config.mlflow_experiment)
 
-        mlflow.log_params(config)
+        mlflow.log_params(config.__dict__)
 
     train_df, test_df, meta_features = load_dataset(config)
 
@@ -401,7 +464,14 @@ def train_cmd(config: cli.RunOptions):
     except RuntimeError:
         pass
 
-    train_model(train_df=train_df, meta_features=meta_features, config=config)
+    test_transform = transforms.Compose([
+        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    train_model(train_df=train_df, meta_features=meta_features, config=config, test_transform=test_transform)
+    predict_model(test_df=test_df, meta_features=meta_features, config=config, test_transform=test_transform)
 
 
 class CommanCLI(click.MultiCommand):
