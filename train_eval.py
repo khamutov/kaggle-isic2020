@@ -444,6 +444,8 @@ def train_cmd(config: cli.RunOptions):
     # check device available
     _tmp_tensor = torch.rand(1).to(config.device)
     del _tmp_tensor
+    
+    torch.cuda.set_device(config.device)
 
     if config.is_track_mlflow():
         if not config.mlflow_experiment:
