@@ -328,7 +328,7 @@ def train_model(train_df, meta_features, config, test_transform):
 
                 if val_roc >= best_val:
                     best_val = val_roc
-                    patience = patience  # Resetting patience since we have new best validation accuracy
+                    patience = config.patience  # Resetting patience since we have new best validation accuracy
                     torch.save(model, model_path)  # Saving current best model
                 else:
                     patience -= 1
