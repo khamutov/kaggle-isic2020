@@ -5,6 +5,7 @@ import signal
 import sys
 import time
 import warnings
+from dataclasses import dataclass
 
 import click
 import configobj
@@ -186,9 +187,165 @@ def load_dataset(config: cli.RunOptions):
     return train_df, test_df, meta_features
 
 
-def train_model(train_df, meta_features, config, test_transform):
+@dataclass
+class TrainResult:
+    best_val: float
+    pred = None
+    target = None
+    names = None
+
+    def __init__(self):
+        pass
+
+
+def train_fit(train_df, val_df, train_transform, test_transform, meta_features, config, fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
+    train_result = TrainResult()
+    train_result.names = val_df["image_name"].to_numpy()
+
+    best_val = None
+    patience = config.patience  # Best validation score within this fold
+    model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
+    train_dataset = MelanomaDataset(df=train_df,
+                                    imfolder=config.dataset_malignant_256 / 'train',
+                                    is_train=True,
+                                    transforms=train_transform,
+                                    meta_features=meta_features)
+    val = MelanomaDataset(df=val_df,
+                          imfolder=config.dataset_malignant_256 / 'train',
+                          is_train=True,
+                          transforms=test_transform,
+                          meta_features=meta_features)
+    train_loader = DataLoader(dataset=train_dataset,
+                              batch_size=config.batch_size,
+                              shuffle=True,
+                              num_workers=config.num_workers,
+                              pin_memory=True,
+                              drop_last=True)
+    val_loader = DataLoader(dataset=val,
+                            batch_size=config.batch_size,
+                            shuffle=False,
+                            num_workers=config.num_workers,
+                            pin_memory=True)
+
+    model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name='efficientnet-b0')
+    model = model.to(config.device)
+
+    pos_weight = torch.tensor([5]).to(config.device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    scheduler = ReduceLROnPlateau(optimizer=optimizer,
+                                  mode='max',
+                                  patience=config.patience,
+                                  verbose=True,
+                                  factor=config.lr_factor)
+    for epoch in trange(config.epochs, desc='Epoch'):
+        start_time = time.time()
+        correct = 0
+        train_losses = 0
+
+        model.train()  # Set the model in train mode
+
+        for data, labels in tqdm(train_loader, desc='Batch', leave=False):
+            data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
+            data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
+            labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
+
+            # Clear gradients first; very important, usually done BEFORE prediction
+            optimizer.zero_grad()
+
+            # Log Probabilities & Backpropagation
+            out = model(data[0], data[1])
+            loss = criterion(out, labels.unsqueeze(1))
+            loss.backward()
+            optimizer.step()
+
+            # --- Save information after this batch ---
+            # Save loss
+            # From log probabilities to actual probabilities
+            # 0 and 1
+            train_preds = torch.round(torch.sigmoid(out))
+            train_losses += loss.item()
+
+            # Number of correct predictions
+            correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
+
+        # Compute Train Accuracy
+        train_acc = correct / len(train_df)
+        model.eval()  # switch model to the evaluation mode
+        val_pred_arr = []
+        with torch.no_grad():  # Do not calculate gradient since we are only predicting
+
+            for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
+                data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
+                data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
+                label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
+                z_val = model(data_val[0], data_val[1])
+                val_pred = torch.sigmoid(z_val)
+                val_pred_arr.append(val_pred.cpu().numpy())
+            val_preds = np.concatenate(val_pred_arr)
+            val_acc = accuracy_score(val_df['target'].values, np.round(val_preds))
+            val_roc = roc_auc_score(val_df['target'].values, val_preds)
+
+            epochval = epoch + 1
+
+            print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|', Fore.CYAN, 'Loss: ', Style.RESET_ALL,
+                  train_losses, '|', Fore.GREEN, 'Train acc:', Style.RESET_ALL, train_acc, '|', Fore.BLUE,
+                  ' Val acc: ', Style.RESET_ALL, val_acc, '|', Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc,
+                  '|', Fore.YELLOW, ' Training time:', Style.RESET_ALL,
+                  str(datetime.timedelta(seconds=time.time() - start_time)))
+
+            if config.is_track_mlflow():
+                mlflow.log_metric("train_loss", train_losses, step=epoch)
+                mlflow.log_metric("train_acc", train_acc, step=epoch)
+                mlflow.log_metric("val_acc", val_acc, step=epoch)
+                mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
+
+            scheduler.step(val_roc)
+            # During the first iteratsion (first epoch) best validation is set to None
+            if not best_val:
+                best_val = val_roc  # So any validation roc_auc we have is the best one for now
+                torch.save(model, model_path)  # Saving the model
+                continue
+
+            if val_roc >= best_val:
+                best_val = val_roc
+                patience = config.patience  # Resetting patience since we have new best validation accuracy
+                torch.save(model, model_path)  # Saving current best model
+            else:
+                patience -= 1
+                if patience == 0:
+                    print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
+                    break
+
+    # val on best model
+    model = torch.load(model_path)  # Loading best model of this fold
+    model.eval()  # switch model to the evaluation mode
+    val_pred_arr = []
+    with torch.no_grad():
+        # Predicting on validation set once again to obtain data for OOF
+        val_targets_arr = []
+        for j, (x_val, y_val) in enumerate(val_loader):
+            x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
+            x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
+            y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
+            z_val = model(x_val[0], x_val[1])
+            val_pred = torch.sigmoid(z_val)
+            val_pred_arr.append(val_pred.cpu().numpy())
+            val_targets_arr.append(y_val.cpu().numpy())
+        val_preds = np.concatenate(val_pred_arr)
+
+        train_result.pred = val_preds
+        train_result.target = np.concatenate(val_targets_arr)
+
+    train_result.best_val = best_val
+
+    return train_result
+
+
+def train_model_cv(train_df, meta_features, config, test_transform):
     train_transform = transforms.Compose([
         #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
         transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
@@ -221,144 +378,24 @@ def train_model(train_df, meta_features, config, test_transform):
         print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN,
               '-' * 20,
               Style.RESET_ALL)
-        best_val = None
-        patience = config.patience  # Best validation score within this fold
-        model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
-        train_dataset = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
-                                        imfolder=config.dataset_malignant_256 / 'train',
-                                        is_train=True,
-                                        transforms=train_transform,
-                                        meta_features=meta_features)
-        val = MelanomaDataset(df=train_df.iloc[val_idx].reset_index(drop=True),
-                              imfolder=config.dataset_malignant_256 / 'train',
-                              is_train=True,
-                              transforms=test_transform,
-                              meta_features=meta_features)
-        train_loader = DataLoader(dataset=train_dataset,
-                                  batch_size=config.batch_size,
-                                  shuffle=True,
-                                  num_workers=config.num_workers,
-                                  pin_memory=True,
-                                  drop_last=True)
-        val_loader = DataLoader(dataset=val,
-                                batch_size=config.batch_size,
-                                shuffle=False,
-                                num_workers=config.num_workers,
-                                pin_memory=True)
 
-        model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name='efficientnet-b0')
-        model = model.to(config.device)
+        train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
+        val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-        criterion = nn.BCEWithLogitsLoss()
+        train_result = train_fit(train_df=train_fit_df,
+                                 val_df=val_fit_df,
+                                 train_transform=train_transform,
+                                 test_transform=test_transform,
+                                 meta_features=meta_features,
+                                 config=config,
+                                 fold_idx=fold_idx)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-        scheduler = ReduceLROnPlateau(optimizer=optimizer,
-                                      mode='max',
-                                      patience=config.patience,
-                                      verbose=True,
-                                      factor=config.lr_factor)
-        for epoch in trange(config.epochs, desc='Epoch'):
-            start_time = time.time()
-            correct = 0
-            train_losses = 0
-
-            model.train()  # Set the model in train mode
-
-            for data, labels in tqdm(train_loader, desc='Batch', leave=False):
-                data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
-                data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
-                labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
-
-                # Clear gradients first; very important, usually done BEFORE prediction
-                optimizer.zero_grad()
-
-                # Log Probabilities & Backpropagation
-                out = model(data[0], data[1])
-                loss = criterion(out, labels.unsqueeze(1))
-                loss.backward()
-                optimizer.step()
-
-                # --- Save information after this batch ---
-                # Save loss
-                # From log probabilities to actual probabilities
-                # 0 and 1
-                train_preds = torch.round(torch.sigmoid(out))
-                train_losses += loss.item()
-
-                # Number of correct predictions
-                correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
-
-            # Compute Train Accuracy
-            train_acc = correct / len(train_idx)
-            model.eval()  # switch model to the evaluation mode
-            val_pred_arr = []
-            with torch.no_grad():  # Do not calculate gradient since we are only predicting
-
-                for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
-                    data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
-                    data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
-                    label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
-                    z_val = model(data_val[0], data_val[1])
-                    val_pred = torch.sigmoid(z_val)
-                    val_pred_arr.append(val_pred.cpu().numpy())
-                val_preds = np.concatenate(val_pred_arr)
-                val_acc = accuracy_score(train_df.iloc[val_idx]['target'].values, np.round(val_preds))
-                val_roc = roc_auc_score(train_df.iloc[val_idx]['target'].values, val_preds)
-
-                epochval = epoch + 1
-
-                print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|', Fore.CYAN, 'Loss: ', Style.RESET_ALL,
-                      train_losses, '|', Fore.GREEN, 'Train acc:', Style.RESET_ALL, train_acc, '|', Fore.BLUE,
-                      ' Val acc: ', Style.RESET_ALL, val_acc, '|', Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc,
-                      '|', Fore.YELLOW, ' Training time:', Style.RESET_ALL,
-                      str(datetime.timedelta(seconds=time.time() - start_time)))
-
-                if config.is_track_mlflow():
-                    mlflow.log_metric("train_loss", train_losses, step=epoch)
-                    mlflow.log_metric("train_acc", train_acc, step=epoch)
-                    mlflow.log_metric("val_acc", val_acc, step=epoch)
-                    mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
-
-                scheduler.step(val_roc)
-                # During the first iteration (first epoch) best validation is set to None
-                if not best_val:
-                    best_val = val_roc  # So any validation roc_auc we have is the best one for now
-                    torch.save(model, model_path)  # Saving the model
-                    continue
-
-                if val_roc >= best_val:
-                    best_val = val_roc
-                    patience = config.patience  # Resetting patience since we have new best validation accuracy
-                    torch.save(model, model_path)  # Saving current best model
-                else:
-                    patience -= 1
-                    if patience == 0:
-                        print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
-                        break
-
-        # val on best model
-        model = torch.load(model_path)  # Loading best model of this fold
-        model.eval()  # switch model to the evaluation mode
-        val_pred_arr = []
-        with torch.no_grad():
-            # Predicting on validation set once again to obtain data for OOF
-            val_targets_arr = []
-            for j, (x_val, y_val) in enumerate(val_loader):
-                x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
-                x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
-                y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
-                z_val = model(x_val[0], x_val[1])
-                val_pred = torch.sigmoid(z_val)
-                val_pred_arr.append(val_pred.cpu().numpy())
-                val_targets_arr.append(y_val.cpu().numpy())
-            val_preds = np.concatenate(val_pred_arr)
-            oof_pred.append(val_preds)
-            oof_target.append(np.concatenate(val_targets_arr))
-            oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
-            # oof[val_idx] = val_preds
+        oof_pred.append(train_result.pred)
+        oof_target.append(train_result.target)
+        oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
         if config.is_track_mlflow():
-            mlflow.log_metric("best_roc_auc", best_val)
+            mlflow.log_metric("best_roc_auc", train_result.best_val)
             mlflow.end_run()
 
     oof = np.concatenate(oof_pred).squeeze()
@@ -457,7 +494,7 @@ def train_cmd(config: cli.RunOptions):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    train_model(train_df=train_df, meta_features=meta_features, config=config, test_transform=test_transform)
+    train_model_cv(train_df=train_df, meta_features=meta_features, config=config, test_transform=test_transform)
     predict_model(test_df=test_df, meta_features=meta_features, config=config, test_transform=test_transform)
 
 
