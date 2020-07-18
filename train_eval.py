@@ -245,6 +245,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
         start_time = time.time()
         correct = 0
         train_losses = 0
+        val_losses = 0
 
         model.train()  # Set the model in train mode
 
@@ -282,7 +283,12 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
                 data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
                 data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
                 label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
+
                 z_val = model(data_val[0], data_val[1])
+
+                loss = criterion(z_val, label_val.unsqueeze(1))
+                val_losses += loss.item()
+
                 val_pred = torch.sigmoid(z_val)
                 val_pred_arr.append(val_pred.cpu().numpy())
             val_preds = np.concatenate(val_pred_arr)
@@ -291,14 +297,19 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
 
             epochval = epoch + 1
 
-            print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|', Fore.CYAN, 'Loss: ', Style.RESET_ALL,
-                  train_losses, '|', Fore.GREEN, 'Train acc:', Style.RESET_ALL, train_acc, '|', Fore.BLUE,
-                  ' Val acc: ', Style.RESET_ALL, val_acc, '|', Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc,
-                  '|', Fore.YELLOW, ' Training time:', Style.RESET_ALL,
+            train_loss = train_losses / len(train_df)
+            val_loss = val_losses / len(val_df)
+
+            print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|',
+                  Fore.CYAN, 'Loss: ', Style.RESET_ALL, train_loss, '|',
+                  Fore.BLUE, ' Val loss: ', Style.RESET_ALL, val_loss, '|',
+                  Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc, '|',
+                  Fore.YELLOW, ' Training time:', Style.RESET_ALL,
                   str(datetime.timedelta(seconds=time.time() - start_time)))
 
             if config.is_track_mlflow():
-                mlflow.log_metric("train_loss", train_losses, step=epoch)
+                mlflow.log_metric("train_loss", train_loss, step=epoch)
+                mlflow.log_metric("val_loss", val_loss, step=epoch)
                 mlflow.log_metric("train_acc", train_acc, step=epoch)
                 mlflow.log_metric("val_acc", val_acc, step=epoch)
                 mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
