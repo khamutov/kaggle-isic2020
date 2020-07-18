@@ -68,6 +68,7 @@ class MelanomaDataset(Dataset):
     def __getitem__(self, index):
         im_path = os.path.join(self.imfolder, self.df.iloc[index]['image_name'] + '.jpg')
         image = cv2.imread(im_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         metadata = np.array(self.df.iloc[index][self.meta_features].values, dtype=np.float32)
 
         if self.transforms:
