@@ -126,7 +126,9 @@ class EfficientNetwork(nn.Module):
         if prints:
             print('Features Image shape:', image.shape)
 
-        image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
+        # image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
+        features = F.adaptive_avg_pool2d(image, 1)
+        image = features.view(features.size(0), -1)
         if prints:
             print('Image Reshaped shape:', image.shape)
 
