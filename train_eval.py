@@ -85,19 +85,14 @@ class MelanomaDataset(Dataset):
 
 
 class EfficientNetwork(nn.Module):
-    def __init__(self, output_size, no_columns, b4=False, b2=False):
+    def __init__(self, output_size, no_columns, model_name='efficientnet-b0'):
         super().__init__()
-        self.b4, self.b2, self.no_columns = b4, b2, no_columns
+        self.no_columns = no_columns
 
-        # Define Feature part (IMAGE)
-        if b4:
-            self.features = EfficientNet.from_pretrained('efficientnet-b4')
-        elif b2:
-            self.features = EfficientNet.from_pretrained('efficientnet-b2')
-        else:
-            self.features = EfficientNet.from_pretrained('efficientnet-b7')
+        self.features = EfficientNet.from_pretrained(model_name)
 
         # (CSV) or Meta Features
+        meta_features_out = 250
         self.csv = nn.Sequential(nn.Linear(self.no_columns, 250),
                                  nn.BatchNorm1d(250),
                                  nn.ReLU(),
@@ -108,21 +103,16 @@ class EfficientNetwork(nn.Module):
                                  nn.ReLU(),
                                  nn.Dropout(p=0.3),
 
-                                 nn.Linear(250, 250),
-                                 nn.BatchNorm1d(250),
+                                 nn.Linear(250, meta_features_out),
+                                 nn.BatchNorm1d(meta_features_out),
                                  nn.ReLU(),
                                  nn.Dropout(p=0.3))
 
-        # Define Classification part
-        if b4:
-            self.classification = nn.Sequential(nn.Linear(1792 + 250, 250),
-                                                nn.Linear(250, output_size))
-        elif b2:
-            self.classification = nn.Sequential(nn.Linear(1408 + 250, 250),
-                                                nn.Linear(250, output_size))
-        else:
-            self.classification = nn.Sequential(nn.Linear(2560 + 250, 250),
-                                                nn.Linear(250, output_size))
+        self.eff_net_out_features = getattr(self.features, '_fc').in_features
+
+        fc_hidden_size = 250
+        self.classification = nn.Sequential(nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
+                                            nn.Linear(fc_hidden_size, output_size))
 
     def forward(self, image, csv_data, prints=False):
 
@@ -136,12 +126,7 @@ class EfficientNetwork(nn.Module):
         if prints:
             print('Features Image shape:', image.shape)
 
-        if self.b4:
-            image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 1792)
-        elif self.b2:
-            image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 1408)
-        else:
-            image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, 2560)
+        image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
         if prints:
             print('Image Reshaped shape:', image.shape)
 
@@ -258,7 +243,7 @@ def train_model(train_df, meta_features, config, test_transform):
                                 num_workers=config.num_workers,
                                 pin_memory=True)
 
-        model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b4=True)
+        model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name='efficientnet-b0')
         model = model.to(config.device)
 
         criterion = nn.BCEWithLogitsLoss()
