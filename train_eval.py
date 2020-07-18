@@ -1,43 +1,35 @@
+import datetime
 import os
 import random
-import time
-import datetime
-
 import signal
 import sys
+import time
+import warnings
 
+import click
 import configobj
 import cv2
 import mlflow
-import pandas as pd
 import numpy as np
-
-from colorama import Fore, Style
-
-import click
-
-from tqdm.auto import tqdm, trange
-
-from sklearn.model_selection import GroupKFold
-from sklearn.metrics import accuracy_score, roc_auc_score
-
+import pandas as pd
 # PyTorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torchtoolbox.transform as transforms
-
-from torch.multiprocessing import set_start_method
-
+from colorama import Fore, Style
 from efficientnet_pytorch import EfficientNet
-
-import warnings
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.model_selection import KFold
+from torch.multiprocessing import set_start_method
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import Dataset, DataLoader
+from tqdm.auto import tqdm, trange
 
 import cli
 
 FOLDS = 5
+
 
 def signal_handler(_sig, _frame):
     print('You pressed Ctrl+C!')
@@ -170,7 +162,8 @@ class EfficientNetwork(nn.Module):
 
 
 def load_dataset(config: cli.RunOptions):
-    train_df = pd.read_csv(config.dataset_malignant_256 / 'train_concat.csv')
+    train_df = pd.read_csv(config.dataset_malignant_256 / 'train.csv')
+    train_df['fold'] = train_df['tfrecord']
     test_df = pd.read_csv(config.dataset_official / 'test.csv')
 
     train_df['sex'] = train_df['sex'].map({'male': 1, 'female': 0})
@@ -218,17 +211,20 @@ def train_model(train_df, meta_features, config, test_transform):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    skf = GroupKFold(n_splits=FOLDS)
-
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
     oof_target = []
     oof_val = []
     oof_folds = []
+    oof_names = []
 
-    for fold_idx, (train_idx, val_idx) in enumerate(
-            skf.split(X=np.zeros(len(train_df)), y=train_df['target'], groups=train_df['patient_id'].tolist()), 1):
+    skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
+    for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
+        train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
+        val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
+
+        oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
 
         if config.is_track_mlflow():
             mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
@@ -241,12 +237,12 @@ def train_model(train_df, meta_features, config, test_transform):
         patience = config.patience  # Best validation score within this fold
         model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
         train_dataset = MelanomaDataset(df=train_df.iloc[train_idx].reset_index(drop=True),
-                                        imfolder=config.dataset_malignant_256 / 'train/train/',
+                                        imfolder=config.dataset_malignant_256 / 'train',
                                         is_train=True,
                                         transforms=train_transform,
                                         meta_features=meta_features)
         val = MelanomaDataset(df=train_df.iloc[val_idx].reset_index(drop=True),
-                              imfolder=config.dataset_malignant_256 / 'train/train/',
+                              imfolder=config.dataset_malignant_256 / 'train',
                               is_train=True,
                               transforms=test_transform,
                               meta_features=meta_features)
@@ -254,14 +250,15 @@ def train_model(train_df, meta_features, config, test_transform):
                                   batch_size=config.batch_size,
                                   shuffle=True,
                                   num_workers=config.num_workers,
-                                  pin_memory=True)
+                                  pin_memory=True,
+                                  drop_last=True)
         val_loader = DataLoader(dataset=val,
                                 batch_size=config.batch_size,
                                 shuffle=False,
                                 num_workers=config.num_workers,
                                 pin_memory=True)
 
-        model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b2=True)
+        model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), b4=True)
         model = model.to(config.device)
 
         criterion = nn.BCEWithLogitsLoss()
@@ -380,7 +377,7 @@ def train_model(train_df, meta_features, config, test_transform):
     true = np.concatenate(oof_target)
     folds = np.concatenate(oof_folds)
     auc = roc_auc_score(true, oof)
-    names = train_df['image_name'].to_numpy()
+    names = np.concatenate(oof_names)
 
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
     print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
@@ -398,7 +395,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, test_transform
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
 
     test = MelanomaDataset(df=test_df,
-                           imfolder=config.dataset_malignant_256 / 'test/test',
+                           imfolder=config.dataset_malignant_256 / 'test',
                            is_train=False,
                            transforms=test_transform,
                            meta_features=meta_features)
