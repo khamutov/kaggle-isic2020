@@ -46,6 +46,8 @@ options = [
     RunOption(name="tta", default=11, desc="test time augmentation steps"),
     RunOption(name="dry_run", default=False,
               desc="run train on small set, do not track in MLflow. For sanity check only.").flag(),
+    RunOption(name="no_cv", default=False,
+              desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
 ]
 
 
@@ -67,6 +69,7 @@ class RunOptions:
         self._device = None
         self.tta = None
         self.dry_run = None
+        self.no_cv = False
         for option in options:
             self.__setattr__(option.name, option.default)
 

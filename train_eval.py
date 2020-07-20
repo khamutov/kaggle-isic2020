@@ -356,26 +356,70 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     return train_result
 
 
-def train_model_cv(train_df, meta_features, config, test_transform):
-    train_transform = transforms.Compose([
-        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
-        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
-        transforms.RandomApply([
-            transforms.RandomChoice([
-                                        transforms.RandomAffine(degrees=20),
-                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
-                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
-                                        # transforms.RandomAffine(degrees=0,shear=0.15),
-                                        transforms.RandomHorizontalFlip(p=1.0)
-                                    ])
-        ], p=0.5),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+def train_model_no_cv(train_df, meta_features, config, train_transform, test_transform):
+    train_len = len(train_df)
+    oof = np.zeros(shape=(train_len, 1))
+    oof_pred = []
+    oof_target = []
+    oof_val = []
+    oof_folds = []
+    oof_names = []
 
+    idxT = range(12)
+    idxV = np.arange(12, 15)
+    fold_idx = 1
+
+    train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
+    val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
+
+    oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
+
+    if config.is_track_mlflow():
+        mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
+        mlflow.log_param("fold", fold_idx)
+
+    print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'No CV mode', fold_idx, Style.RESET_ALL, Fore.CYAN,
+          '-' * 20,
+          Style.RESET_ALL)
+
+    train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
+    val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
+
+    train_result = train_fit(train_df=train_fit_df,
+                             val_df=val_fit_df,
+                             train_transform=train_transform,
+                             test_transform=test_transform,
+                             meta_features=meta_features,
+                             config=config,
+                             fold_idx=fold_idx)
+
+    oof_pred.append(train_result.pred)
+    oof_target.append(train_result.target)
+    oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
+
+    if config.is_track_mlflow():
+        mlflow.log_metric("best_roc_auc", train_result.best_val)
+        mlflow.end_run()
+
+    oof = np.concatenate(oof_pred).squeeze()
+    true = np.concatenate(oof_target)
+    folds = np.concatenate(oof_folds)
+    auc = roc_auc_score(true, oof)
+    names = np.concatenate(oof_names)
+
+    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+    print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
+    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+
+    if config.is_track_mlflow():
+        mlflow.log_metric("oof_roc_auc", auc)
+
+    # SAVE OOF TO DISK
+    df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
+    df_oof.to_csv('oof.csv', index=False)
+
+
+def train_model_cv(train_df, meta_features, config, train_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -436,27 +480,8 @@ def train_model_cv(train_df, meta_features, config, test_transform):
     df_oof.to_csv('oof.csv', index=False)
 
 
-def predict_model(test_df, meta_features, config: cli.RunOptions, test_transform):
+def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform):
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
-
-    train_transform = transforms.Compose([
-        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
-        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
-        transforms.RandomApply([
-            transforms.RandomChoice([
-                                        transforms.RandomAffine(degrees=20),
-                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
-                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
-                                        # transforms.RandomAffine(degrees=0,shear=0.15),
-                                        transforms.RandomHorizontalFlip(p=1.0)
-                                    ])
-        ], p=0.5),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
 
     test = MelanomaDataset(df=test_df,
                            imfolder=config.dataset_malignant_256 / 'test',
@@ -527,14 +552,45 @@ def train_cmd(config: cli.RunOptions):
     except RuntimeError:
         pass
 
+    train_transform = transforms.Compose([
+        #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
+        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
+        transforms.RandomApply([
+            transforms.RandomChoice([
+                                        transforms.RandomAffine(degrees=20),
+                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
+                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                                        # transforms.RandomAffine(degrees=0,shear=0.15),
+                                        transforms.RandomHorizontalFlip(p=1.0)
+                                    ])
+        ], p=0.5),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
     test_transform = transforms.Compose([
         #     HairGrowth(hairs = 5,hairs_folder='/kaggle/input/melanoma-hairs/'),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    train_model_cv(train_df=train_df, meta_features=meta_features, config=config, test_transform=test_transform)
-    predict_model(test_df=test_df, meta_features=meta_features, config=config, test_transform=test_transform)
+    train_fn = train_model_no_cv if config.no_cv else train_model_cv
+    train_fn(train_df=train_df,
+             meta_features=meta_features,
+             config=config,
+             train_transform=train_transform,
+             test_transform=test_transform)
+
+    if config.no_cv:
+        print(Fore.MAGENTA, 'Prediction on --no_cv disabled', Style.RESET_ALL)
+    else:
+        predict_model(test_df=test_df,
+                      meta_features=meta_features,
+                      config=config,
+                      train_transform=train_transform,
+                      test_transform=test_transform)
 
 
 class CommanCLI(click.MultiCommand):
