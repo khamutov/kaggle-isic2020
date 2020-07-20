@@ -232,7 +232,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name='efficientnet-b0')
     model = model.to(config.device)
 
-    pos_weight = torch.tensor([5]).to(config.device)
+    pos_weight = torch.tensor([10]).to(config.device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
