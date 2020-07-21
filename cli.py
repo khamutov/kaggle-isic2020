@@ -37,6 +37,7 @@ options = [
     RunOption(name="learning_rate", default=0.001, desc="Learning Rate"),
     RunOption(name="weight_decay", default=0.0, desc="Decay Factor"),
     RunOption(name="lr_factor", default=0.4, desc=""),
+    RunOption(name="loss_bce_label_smoothing", default=0.0, desc="Label smoothing for BCE loss"),
     RunOption(name="num_workers", default=0, desc="num epoches"),
     RunOption(name="dataset_malignant_256", default=None, desc="path to external malignant-256 dataset").path(),
     RunOption(name="dataset_official", default=None, desc="path to official ISIC dataset").path(),
@@ -62,6 +63,7 @@ class RunOptions:
         self.learning_rate = None
         self.weight_decay = None
         self.lr_factor = None
+        self.loss_bce_label_smoothing = None
         self.num_workers = None
         self.dataset_malignant_256: Union[None, Path] = None
         self.dataset_official: Union[None, Path] = None

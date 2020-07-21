@@ -200,7 +200,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, val_df, train_transform, test_transform, meta_features, config, fold_idx=0) -> TrainResult:
+def train_fit(train_df, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -256,12 +256,14 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
             data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
             labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
 
+            y_smooth = labels.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
+
             # Clear gradients first; very important, usually done BEFORE prediction
             optimizer.zero_grad()
 
             # Log Probabilities & Backpropagation
             out = model(data[0], data[1])
-            loss = criterion(out, labels.unsqueeze(1))
+            loss = criterion(out, y_smooth.unsqueeze(1))
             loss.backward()
             optimizer.step()
 
@@ -286,9 +288,11 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
                 data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
                 label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
 
+                y_smooth = label_val.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
+
                 z_val = model(data_val[0], data_val[1])
 
-                loss = criterion(z_val, label_val.unsqueeze(1))
+                loss = criterion(z_val, y_smooth.unsqueeze(1))
                 val_losses += loss.item()
 
                 val_pred = torch.sigmoid(z_val)
