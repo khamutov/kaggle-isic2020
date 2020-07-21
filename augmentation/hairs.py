@@ -58,8 +58,6 @@ class AdvancedHairAugmentation:
 
             img[roi_ho:roi_ho + h_height, roi_wo:roi_wo + h_width] = dst
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
         return img
 
     def __repr__(self):
