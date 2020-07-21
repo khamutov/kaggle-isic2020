@@ -29,9 +29,39 @@ from tqdm.auto import tqdm, trange
 
 from augmentation.hairs import AdvancedHairAugmentation
 
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    import albumentations as A
+    from albumentations.pytorch.transforms import ToTensorV2
+
 import cli
 
 FOLDS = 5
+
+input_res = 256
+resolution = 256
+def get_train_transforms():
+    return A.Compose([
+            A.JpegCompression(p=0.5),
+            A.Rotate(limit=80, p=1.0),
+            A.OneOf([
+                A.OpticalDistortion(),
+                A.GridDistortion(),
+                A.IAAPiecewiseAffine(),
+            ]),
+            A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
+                              height=resolution, width=resolution, p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.GaussianBlur(p=0.3),
+            A.OneOf([
+                A.RandomBrightnessContrast(),
+                A.HueSaturationValue(),
+            ]),
+            A.Cutout(num_holes=8, max_h_size=resolution//8, max_w_size=resolution//8, fill_value=0, p=0.3),
+            A.Normalize(),
+            ToTensorV2(),
+        ], p=1.0)
 
 
 def signal_handler(_sig, _frame):
@@ -75,7 +105,8 @@ class MelanomaDataset(Dataset):
         metadata = np.array(self.df.iloc[index][self.meta_features].values, dtype=np.float32)
 
         if self.transforms:
-            image = self.transforms(image)
+            sample = self.transforms(image=image)
+            image = sample['image']
 
         if self.is_train:
             y = self.df.iloc[index]['target']
@@ -560,33 +591,39 @@ def train_cmd(config: cli.RunOptions):
     except RuntimeError:
         pass
 
-    train_transform = transforms.Compose([
-        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-            if config.hair_augment
-            else identity,
-        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
-        transforms.RandomApply([
-            transforms.RandomChoice([
-                                        transforms.RandomAffine(degrees=20),
-                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
-                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
-                                        # transforms.RandomAffine(degrees=0,shear=0.15),
-                                        transforms.RandomHorizontalFlip(p=1.0)
-                                    ])
-        ], p=0.5),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    test_transform = transforms.Compose([
-        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-            if config.hair_augment
-            else identity,
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+    train_transform = get_train_transforms()
+    # train_transform = transforms.Compose([
+    #     AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+    #         if config.hair_augment
+    #         else identity,
+    #     transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
+    #     transforms.RandomApply([
+    #         transforms.RandomChoice([
+    #                                     transforms.RandomAffine(degrees=20),
+    #                                     transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
+    #                                     transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+    #                                     # transforms.RandomAffine(degrees=0,shear=0.15),
+    #                                     transforms.RandomHorizontalFlip(p=1.0)
+    #                                 ])
+    #     ], p=0.5),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.RandomVerticalFlip(),
+    #     transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # ])
+    # test_transform = transforms.Compose([
+    #     AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+    #         if config.hair_augment
+    #         else identity,
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # ])
+
+    test_transform = A.Compose([
+        A.Normalize(),
+        ToTensorV2(),
+    ], p=1.0)
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
     train_fn(train_df=train_df,
