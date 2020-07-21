@@ -27,6 +27,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm, trange
 
+from augmentation.hairs import AdvancedHairAugmentation
+
 import cli
 
 FOLDS = 5
@@ -355,6 +357,8 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
 
     return train_result
 
+def identity(x):
+    return x
 
 def train_model_no_cv(train_df, meta_features, config, train_transform, test_transform):
     train_len = len(train_df)
@@ -410,6 +414,28 @@ def train_model_no_cv(train_df, meta_features, config, train_transform, test_tra
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
     print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+
+def train_model_cv(train_df, meta_features, config, test_transform):
+    train_transform = transforms.Compose([
+        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+        if config.hair_augment
+        else identity,
+        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
+        transforms.RandomApply([
+            transforms.RandomChoice([
+                                        transforms.RandomAffine(degrees=20),
+                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
+                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                                        # transforms.RandomAffine(degrees=0,shear=0.15),
+                                        transforms.RandomHorizontalFlip(p=1.0)
+                                    ])
+        ], p=0.5),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
     if config.is_track_mlflow():
         mlflow.log_metric("oof_roc_auc", auc)
@@ -482,6 +508,27 @@ def train_model_cv(train_df, meta_features, config, train_transform, test_transf
 
 def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform):
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
+
+    train_transform = transforms.Compose([
+        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+            if config.hair_augment
+            else identity,
+        transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
+        transforms.RandomApply([
+            transforms.RandomChoice([
+                                        transforms.RandomAffine(degrees=20),
+                                        transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
+                                        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
+                                        # transforms.RandomAffine(degrees=0,shear=0.15),
+                                        transforms.RandomHorizontalFlip(p=1.0)
+                                    ])
+        ], p=0.5),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
     test = MelanomaDataset(df=test_df,
                            imfolder=config.dataset_malignant_256 / 'test',

@@ -48,6 +48,7 @@ options = [
               desc="run train on small set, do not track in MLflow. For sanity check only.").flag(),
     RunOption(name="no_cv", default=False,
               desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
+    RunOption(name="hair_augment", default=False, desc="add hair augmentation").flag(),
 ]
 
 
@@ -70,6 +71,7 @@ class RunOptions:
         self.tta = None
         self.dry_run = None
         self.no_cv = False
+        self.hair_augment = None
         for option in options:
             self.__setattr__(option.name, option.default)
 
