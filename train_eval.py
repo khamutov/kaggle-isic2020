@@ -268,12 +268,17 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     pos_weight = torch.tensor([10]).to(config.device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     scheduler = ReduceLROnPlateau(optimizer=optimizer,
                                   mode='max',
                                   patience=config.patience,
                                   verbose=True,
                                   factor=config.lr_factor)
+    if config.optim == cli.OPTIM_ADAM:
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    elif config.optim == cli.OPTIM_ADAMW:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    else:
+        raise Exception("no optimizer set")
     for epoch in trange(config.epochs, desc='Epoch'):
         start_time = time.time()
         correct = 0

@@ -23,11 +23,18 @@ class RunOption:
         self.callback = RunOption._to_path
         return self
 
+    def choice(self, values):
+        self.type = click.Choice(values)
+        return self
+
     @staticmethod
     def _to_path(_ctx, _param, value):
         if value is not None:
             return Path(value)
 
+
+OPTIM_ADAM = "Adam"
+OPTIM_ADAMW = "AdamW"
 
 options = [
     RunOption(name="epochs", default=10, desc="Number of epoches for training."),
@@ -50,6 +57,7 @@ options = [
     RunOption(name="no_cv", default=False,
               desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
     RunOption(name="hair_augment", default=False, desc="add hair augmentation").flag(),
+    RunOption(name="optim", default=OPTIM_ADAM, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW])
 ]
 
 
@@ -74,6 +82,7 @@ class RunOptions:
         self.dry_run = None
         self.no_cv = False
         self.hair_augment = None
+        self.optim = None
         for option in options:
             self.__setattr__(option.name, option.default)
 
