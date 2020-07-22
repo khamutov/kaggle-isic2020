@@ -268,17 +268,28 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     pos_weight = torch.tensor([10]).to(config.device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    scheduler = ReduceLROnPlateau(optimizer=optimizer,
-                                  mode='max',
-                                  patience=config.patience,
-                                  verbose=True,
-                                  factor=config.lr_factor)
     if config.optim == cli.OPTIM_ADAM:
         optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     elif config.optim == cli.OPTIM_ADAMW:
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     else:
         raise Exception("no optimizer set")
+    # scheduler = ReduceLROnPlateau(optimizer=optimizer,
+    #                               mode='max',
+    #                               patience=config.patience,
+    #                               verbose=True,
+    #                               factor=config.lr_factor)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        max_lr=config.learning_rate,
+        epochs=config.epochs,
+        optimizer=optimizer,
+        steps_per_epoch=int(len(train_df) / config.batch_size),
+        pct_start=0.1,
+        div_factor=10,
+        final_div_factor=100,
+        base_momentum=0.90,
+        max_momentum=0.95,
+    )
     for epoch in trange(config.epochs, desc='Epoch'):
         start_time = time.time()
         correct = 0
@@ -302,6 +313,8 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
             loss = criterion(out, y_smooth.unsqueeze(1))
             loss.backward()
             optimizer.step()
+
+            scheduler.step()
 
             # --- Save information after this batch ---
             # Save loss
@@ -356,7 +369,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
                 mlflow.log_metric("val_acc", val_acc, step=epoch)
                 mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
 
-            scheduler.step(val_roc)
+            # scheduler.step(val_roc)
             # During the first iteratsion (first epoch) best validation is set to None
             if not best_val:
                 best_val = val_roc  # So any validation roc_auc we have is the best one for now
