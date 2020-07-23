@@ -1,4 +1,5 @@
 import datetime
+import math
 import os
 import random
 import signal
@@ -23,7 +24,8 @@ from efficientnet_pytorch import EfficientNet
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import KFold
 from torch.multiprocessing import set_start_method
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
 from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm, trange
 
@@ -87,6 +89,41 @@ def seed_everything(seed_value):
         torch.backends.cudnn.deterministic = True
         # noinspection PyUnresolvedReferences
         torch.backends.cudnn.benchmark = True
+
+
+# from huggingface transformers
+def get_cosine_schedule_with_warmup(
+    optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, num_cycles: float = 0.5, last_epoch: int = -1
+):
+    """
+    Create a schedule with a learning rate that decreases following the values of the cosine function between the
+    initial lr set in the optimizer to 0, after a warmup period during which it increases linearly between 0 and the
+    initial lr set in the optimizer.
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (:obj:`int`):
+            The total number of training steps.
+        num_cycles (:obj:`float`, `optional`, defaults to 0.5):
+            The number of waves in the cosine schedule (the defaults is to just decrease from the max value to 0
+            following a half-cosine).
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
 class MelanomaDataset(Dataset):
@@ -273,23 +310,33 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     elif config.optim == cli.OPTIM_ADAMW:
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     else:
-        raise Exception("no optimizer set")
+        raise Exception(f"unknown optimizer f{config.optim}")
+
     # scheduler = ReduceLROnPlateau(optimizer=optimizer,
     #                               mode='max',
     #                               patience=config.patience,
     #                               verbose=True,
     #                               factor=config.lr_factor)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        max_lr=config.learning_rate,
-        epochs=config.epochs,
-        optimizer=optimizer,
-        steps_per_epoch=int(len(train_df) / config.batch_size),
-        pct_start=0.1,
-        div_factor=10,
-        final_div_factor=100,
-        base_momentum=0.90,
-        max_momentum=0.95,
-    )
+    if config.scheduler == cli.SCHED_1CYC:
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            max_lr=config.learning_rate,
+            epochs=config.epochs,
+            optimizer=optimizer,
+            steps_per_epoch=int(len(train_df) / config.batch_size),
+            pct_start=0.1,
+            div_factor=10,
+            final_div_factor=100,
+            base_momentum=0.90,
+            max_momentum=0.95,
+        )
+    elif config.scheduler == cli.SCHED_COSINE:
+        steps_per_epoch = int(len(train_df) / config.batch_size)
+        scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
+                                                    num_warmup_steps=3 * steps_per_epoch,
+                                                    num_training_steps=config.epochs * steps_per_epoch)
+    else:
+        raise Exception(f"unknown scheduler {config.scheduler}")
+
     for epoch in trange(config.epochs, desc='Epoch'):
         start_time = time.time()
         correct = 0
