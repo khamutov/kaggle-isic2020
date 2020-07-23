@@ -35,6 +35,7 @@ class RunOption:
 
 OPTIM_ADAM = "Adam"
 OPTIM_ADAMW = "AdamW"
+OPTIM_SGD = "SGD"
 
 SCHED_1CYC = "OneCycleLR"
 SCHED_COSINE = "CosineWithWarmupLR"
@@ -60,7 +61,7 @@ options = [
     RunOption(name="no_cv", default=False,
               desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
     RunOption(name="hair_augment", default=False, desc="add hair augmentation").flag(),
-    RunOption(name="optim", default=OPTIM_ADAM, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW]),
+    RunOption(name="optim", default=OPTIM_ADAM, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW, OPTIM_SGD]),
     RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE])
 ]
 

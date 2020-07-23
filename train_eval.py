@@ -309,6 +309,8 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
         optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     elif config.optim == cli.OPTIM_ADAMW:
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    elif config.optim == cli.OPTIM_SGD:
+        optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, momentum=0.9, nesterov=True)
     else:
         raise Exception(f"unknown optimizer f{config.optim}")
 
