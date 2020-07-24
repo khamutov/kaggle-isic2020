@@ -562,7 +562,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
     for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
         train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
-        train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT * 2)]
+        train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT * 2)].index
         val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
 
         oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
