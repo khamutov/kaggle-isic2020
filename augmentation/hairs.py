@@ -2,8 +2,9 @@ import cv2
 
 import random
 import os
+from albumentations.core.transforms_interface import ImageOnlyTransform
 
-class AdvancedHairAugmentation:
+class AdvancedHairAugmentation(ImageOnlyTransform):
     """
     Impose an image of a hair to the target image
 
@@ -13,10 +14,11 @@ class AdvancedHairAugmentation:
     """
 
     def __init__(self, hairs: int = 5, hairs_folder: str = ""):
+        super().__init__()
         self.hairs = hairs
         self.hairs_folder = hairs_folder
 
-    def __call__(self, img):
+    def apply(self, image, **params):
         """
         Args:
             img (PIL Image): Image to draw hairs on.
@@ -26,6 +28,7 @@ class AdvancedHairAugmentation:
         """
         n_hairs = random.randint(0, self.hairs)
 
+        img = image
         if not n_hairs:
             return img
 

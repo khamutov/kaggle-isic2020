@@ -42,8 +42,10 @@ FOLDS = 5
 
 input_res = 256
 resolution = 256
-def get_train_transforms():
+def get_train_transforms(config):
     return A.Compose([
+            AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+            if config.hair_augment else identity,
             A.JpegCompression(p=0.5),
             A.Rotate(limit=80, p=1.0),
             A.OneOf([
@@ -658,7 +660,7 @@ def train_cmd(config: cli.RunOptions):
     except RuntimeError:
         pass
 
-    train_transform = get_train_transforms()
+    train_transform = get_train_transforms(config)
     # train_transform = transforms.Compose([
     #     AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
     #         if config.hair_augment
@@ -688,6 +690,8 @@ def train_cmd(config: cli.RunOptions):
     # ])
 
     test_transform = A.Compose([
+        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
+        if config.hair_augment else identity,
         A.Normalize(),
         ToTensorV2(),
     ], p=1.0)
