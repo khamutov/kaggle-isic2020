@@ -45,7 +45,7 @@ resolution = 256
 def get_train_transforms(config):
     return A.Compose([
             AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-            if config.hair_augment else identity,
+            if config.hair_augment else A.NoOp(),
             A.JpegCompression(p=0.5),
             A.Rotate(limit=80, p=1.0),
             A.OneOf([
@@ -126,6 +126,20 @@ def get_cosine_schedule_with_warmup(
         return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+# This is a common train schedule for transfer learning.
+# The learning rate starts near zero, then increases to a maximum, then decays over time.
+def get_exp_schedule_with_warmup(optimizer: Optimizer, num_warmup_steps: int, steps_per_epoch: int, num_sustain_steps: int = 0, lr_decay: float = 0.8):
+    def lrfn(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        elif current_step < num_warmup_steps + num_sustain_steps:
+            return 1.0
+
+        return lr_decay ** (float(current_step - num_warmup_steps - num_sustain_steps) / steps_per_epoch)
+
+    return LambdaLR(optimizer, lrfn)
 
 
 class MelanomaDataset(Dataset):
@@ -341,12 +355,14 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     #                               patience=config.patience,
     #                               verbose=True,
     #                               factor=config.lr_factor)
+    steps_per_epoch = int(len(train_dataset) / config.batch_size)
+
     if config.scheduler == cli.SCHED_1CYC:
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             max_lr=config.learning_rate,
             epochs=config.epochs,
             optimizer=optimizer,
-            steps_per_epoch=int(len(train_dataset) / config.batch_size),
+            steps_per_epoch=steps_per_epoch,
             pct_start=0.1,
             div_factor=10,
             final_div_factor=100,
@@ -354,10 +370,15 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
             max_momentum=0.95,
         )
     elif config.scheduler == cli.SCHED_COSINE:
-        steps_per_epoch = int(len(train_dataset) / config.batch_size)
         scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
                                                     num_warmup_steps=3 * steps_per_epoch,
                                                     num_training_steps=config.epochs * steps_per_epoch)
+    elif config.scheduler == cli.SCHED_DEOTTE:
+        scheduler = get_exp_schedule_with_warmup(optimizer=optimizer,
+                                                 num_warmup_steps=5 * steps_per_epoch,
+                                                 steps_per_epoch=steps_per_epoch,
+                                                 num_sustain_steps=0)
+
     else:
         raise Exception(f"unknown scheduler {config.scheduler}")
 
@@ -718,7 +739,7 @@ def train_cmd(config: cli.RunOptions):
 
     test_transform = A.Compose([
         AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-        if config.hair_augment else identity,
+        if config.hair_augment else A.NoOp(),
         A.Normalize(),
         ToTensorV2(),
     ], p=1.0)

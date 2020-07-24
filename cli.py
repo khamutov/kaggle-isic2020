@@ -39,6 +39,7 @@ OPTIM_SGD = "SGD"
 
 SCHED_1CYC = "OneCycleLR"
 SCHED_COSINE = "CosineWithWarmupLR"
+SCHED_DEOTTE = "DeotteWithWarmupLR"
 
 options = [
     RunOption(name="epochs", default=10, desc="Number of epoches for training."),
@@ -63,7 +64,7 @@ options = [
               desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
     RunOption(name="hair_augment", default=False, desc="add hair augmentation").flag(),
     RunOption(name="optim", default=OPTIM_ADAM, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW, OPTIM_SGD]),
-    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE])
+    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE, SCHED_DEOTTE])
 ]
 
 
