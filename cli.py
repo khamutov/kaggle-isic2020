@@ -51,6 +51,7 @@ options = [
     RunOption(name="loss_bce_label_smoothing", default=0.0, desc="Label smoothing for BCE loss"),
     RunOption(name="num_workers", default=0, desc="num epoches"),
     RunOption(name="dataset_malignant_256", default=None, desc="path to external malignant-256 dataset").path(),
+    RunOption(name="dataset_malignant_256_2019", default=None, desc="path to external malignant-256 dataset 2019").path(),
     RunOption(name="dataset_official", default=None, desc="path to official ISIC dataset").path(),
     RunOption(name="mlflow_tracking_url", default=None, desc="mlflow tracking url"),
     RunOption(name="mlflow_experiment", default=None, desc="mlflow tracking url"),
@@ -79,6 +80,7 @@ class RunOptions:
         self.loss_bce_label_smoothing = None
         self.num_workers = None
         self.dataset_malignant_256: Union[None, Path] = None
+        self.dataset_malignant_256_2019: Union[None, Path] = None
         self.dataset_official: Union[None, Path] = None
         self.mlflow_tracking_url = None
         self.mlflow_experiment = None

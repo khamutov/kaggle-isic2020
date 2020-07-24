@@ -224,39 +224,53 @@ class EfficientNetwork(nn.Module):
 
 def load_dataset(config: cli.RunOptions):
     train_df = pd.read_csv(config.dataset_malignant_256 / 'train.csv')
+    train_df_2019 = pd.read_csv(config.dataset_malignant_256_2019 / 'train.csv')
+
     train_df['fold'] = train_df['tfrecord']
+    train_df_2019['fold'] = train_df_2019['tfrecord']
     test_df = pd.read_csv(config.dataset_official / 'test.csv')
 
     train_df['sex'] = train_df['sex'].map({'male': 1, 'female': 0})
+    train_df_2019['sex'] = train_df_2019['sex'].map({'male': 1, 'female': 0})
+
     test_df['sex'] = test_df['sex'].map({'male': 1, 'female': 0})
+
     train_df['sex'] = train_df['sex'].fillna(-1)
+    train_df_2019['sex'] = train_df_2019['sex'].fillna(-1)
+
     test_df['sex'] = test_df['sex'].fillna(-1)
 
     # imputing
     imp_mean = (train_df["age_approx"].sum()) / (train_df["age_approx"].count() - train_df["age_approx"].isna().sum())
     train_df['age_approx'] = train_df['age_approx'].fillna(imp_mean)
-    train_df['age_approx'].head()
+    train_df_2019['age_approx'] = train_df_2019['age_approx'].fillna(imp_mean)
+
     imp_mean_test = (test_df["age_approx"].sum()) / (test_df["age_approx"].count())
     test_df['age_approx'] = test_df['age_approx'].fillna(imp_mean_test)
 
     train_df['patient_id'] = train_df['patient_id'].fillna(0)
+    train_df_2019['patient_id'] = train_df_2019['patient_id'].fillna(0)
 
     # OHE
     # TODO: make on sklearn
 
-    concat = pd.concat([train_df['anatom_site_general_challenge'], test_df['anatom_site_general_challenge']],
+    concat = pd.concat([train_df['anatom_site_general_challenge'],
+                        train_df_2019['anatom_site_general_challenge'],
+                        test_df['anatom_site_general_challenge']],
                        ignore_index=True)
     dummies = pd.get_dummies(concat, dummy_na=True, dtype=np.uint8, prefix='site')
     train_df = pd.concat([train_df, dummies.iloc[:train_df.shape[0]]], axis=1)
-    test_df = pd.concat([test_df, dummies.iloc[train_df.shape[0]:].reset_index(drop=True)], axis=1)
+    train_df_2019 = pd.concat([train_df_2019, dummies.iloc[train_df.shape[0]:train_df.shape[0]+train_df_2019.shape[0]].reset_index(drop=True)], axis=1)
+    test_df = pd.concat([test_df, dummies.iloc[train_df.shape[0]+train_df_2019.shape[0]:].reset_index(drop=True)], axis=1)
 
     meta_features = ['sex', 'age_approx'] + [col for col in train_df.columns if 'site_' in col]
     meta_features.remove('anatom_site_general_challenge')
 
     test_df = test_df.drop(["anatom_site_general_challenge"], axis=1)
     train_df = train_df.drop(["anatom_site_general_challenge"], axis=1)
+    train_df_2019 = train_df_2019.drop(["anatom_site_general_challenge"], axis=1)
 
-    return train_df, test_df, meta_features
+    return train_df, train_df_2019, test_df, meta_features
 
 
 @dataclass
@@ -270,7 +284,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
+def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -279,11 +293,17 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
     best_val = None
     patience = config.patience  # Best validation score within this fold
     model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
-    train_dataset = MelanomaDataset(df=train_df,
-                                    imfolder=config.dataset_malignant_256 / 'train',
-                                    is_train=True,
-                                    transforms=train_transform,
-                                    meta_features=meta_features)
+    train_dataset_2020 = MelanomaDataset(df=train_df,
+                                         imfolder=config.dataset_malignant_256 / 'train',
+                                         is_train=True,
+                                         transforms=train_transform,
+                                         meta_features=meta_features)
+    train_dataset_2018 = MelanomaDataset(df=train_df_2018,
+                                         imfolder=config.dataset_malignant_256_2019 / 'train',
+                                         is_train=True,
+                                         transforms=train_transform,
+                                         meta_features=meta_features)
+    train_dataset = torch.utils.data.ConcatDataset([train_dataset_2020, train_dataset_2018])
     val = MelanomaDataset(df=val_df,
                           imfolder=config.dataset_malignant_256 / 'train',
                           is_train=True,
@@ -326,7 +346,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
             max_lr=config.learning_rate,
             epochs=config.epochs,
             optimizer=optimizer,
-            steps_per_epoch=int(len(train_df) / config.batch_size),
+            steps_per_epoch=int(len(train_dataset) / config.batch_size),
             pct_start=0.1,
             div_factor=10,
             final_div_factor=100,
@@ -334,7 +354,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
             max_momentum=0.95,
         )
     elif config.scheduler == cli.SCHED_COSINE:
-        steps_per_epoch = int(len(train_df) / config.batch_size)
+        steps_per_epoch = int(len(train_dataset) / config.batch_size)
         scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
                                                     num_warmup_steps=3 * steps_per_epoch,
                                                     num_training_steps=config.epochs * steps_per_epoch)
@@ -378,7 +398,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
             correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
 
         # Compute Train Accuracy
-        train_acc = correct / len(train_df)
+        train_acc = correct / len(train_dataset)
         model.eval()  # switch model to the evaluation mode
         val_pred_arr = []
         with torch.no_grad():  # Do not calculate gradient since we are only predicting
@@ -403,8 +423,8 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
 
             epochval = epoch + 1
 
-            train_loss = train_losses / len(train_df)
-            val_loss = val_losses / len(val_df)
+            train_loss = train_losses / len(train_dataset)
+            val_loss = val_losses / len(val)
 
             print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|',
                   Fore.CYAN, 'Loss: ', Style.RESET_ALL, train_loss, '|',
@@ -464,7 +484,7 @@ def train_fit(train_df, val_df, train_transform, test_transform, meta_features, 
 def identity(x):
     return x
 
-def train_model_no_cv(train_df, meta_features, config, train_transform, test_transform):
+def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -473,11 +493,12 @@ def train_model_no_cv(train_df, meta_features, config, train_transform, test_tra
     oof_folds = []
     oof_names = []
 
-    idxT = range(12)
+    idxT = np.arange(12)
     idxV = np.arange(12, 15)
     fold_idx = 1
 
     train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
+    train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT*2)].index
     val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
 
     oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
@@ -491,9 +512,11 @@ def train_model_no_cv(train_df, meta_features, config, train_transform, test_tra
           Style.RESET_ALL)
 
     train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
+    train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
     val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
     train_result = train_fit(train_df=train_fit_df,
+                             train_df_2018=train_fit_df_2018,
                              val_df=val_fit_df,
                              train_transform=train_transform,
                              test_transform=test_transform,
@@ -527,7 +550,7 @@ def train_model_no_cv(train_df, meta_features, config, train_transform, test_tra
     df_oof.to_csv('oof.csv', index=False)
 
 
-def train_model_cv(train_df, meta_features, config, train_transform, test_transform):
+def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -539,6 +562,7 @@ def train_model_cv(train_df, meta_features, config, train_transform, test_transf
     skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
     for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
         train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
+        train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT * 2)]
         val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
 
         oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
@@ -552,9 +576,11 @@ def train_model_cv(train_df, meta_features, config, train_transform, test_transf
               Style.RESET_ALL)
 
         train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
+        train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
         val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
         train_result = train_fit(train_df=train_fit_df,
+                                 train_df_2018=train_fit_df_2018,
                                  val_df=val_fit_df,
                                  train_transform=train_transform,
                                  test_transform=test_transform,
@@ -650,10 +676,11 @@ def train_cmd(config: cli.RunOptions):
 
         mlflow.log_params(config.__dict__)
 
-    train_df, test_df, meta_features = load_dataset(config)
+    train_df, train_df_2019, test_df, meta_features = load_dataset(config)
 
     if config.dry_run:
         train_df = train_df.head(640)
+        train_df_2019 = train_df_2019.head(640)
 
     try:
         set_start_method('spawn')
@@ -698,6 +725,7 @@ def train_cmd(config: cli.RunOptions):
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
     train_fn(train_df=train_df,
+             train_df_2018=train_df_2019,
              meta_features=meta_features,
              config=config,
              train_transform=train_transform,
