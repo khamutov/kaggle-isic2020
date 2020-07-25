@@ -40,8 +40,8 @@ import cli
 
 FOLDS = 5
 
-input_res = 256
-resolution = 256
+input_res = 384
+resolution = 384
 def get_train_transforms(config):
     return A.Compose([
             AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
@@ -335,7 +335,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
                             num_workers=config.num_workers,
                             pin_memory=True)
 
-    model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name='efficientnet-b0')
+    model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name=config.model)
     model = model.to(config.device)
 
     pos_weight = torch.tensor([10]).to(config.device)
@@ -787,6 +787,7 @@ class CommanCLI(click.MultiCommand):
 
             for key, val in kwargs.items():
                 run_options.__setattr__(key, val)
+            run_options.post_init()
             train_cmd(run_options)
 
         ret = click.Command(name, params=params, callback=train_callback)

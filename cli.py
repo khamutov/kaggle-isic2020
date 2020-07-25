@@ -27,6 +27,10 @@ class RunOption:
         self.type = click.Choice(values)
         return self
 
+    def integer(self):
+        self.type = int
+        return self
+
     @staticmethod
     def _to_path(_ctx, _param, value):
         if value is not None:
@@ -41,9 +45,29 @@ SCHED_1CYC = "OneCycleLR"
 SCHED_COSINE = "CosineWithWarmupLR"
 SCHED_DEOTTE = "DeotteWithWarmupLR"
 
+MODEL_EFFICIENTNET_B0 = "efficientnet-b0"
+MODEL_EFFICIENTNET_B1 = "efficientnet-b1"
+MODEL_EFFICIENTNET_B2 = "efficientnet-b2"
+MODEL_EFFICIENTNET_B3 = "efficientnet-b3"
+MODEL_EFFICIENTNET_B4 = "efficientnet-b4"
+MODEL_EFFICIENTNET_B5 = "efficientnet-b5"
+MODEL_EFFICIENTNET_B6 = "efficientnet-b6"
+MODEL_EFFICIENTNET_B7 = "efficientnet-b7"
+
+batches = {
+    MODEL_EFFICIENTNET_B0: 100,
+    MODEL_EFFICIENTNET_B1: 1000,  # TODO: fill in
+    MODEL_EFFICIENTNET_B2: 64,
+    MODEL_EFFICIENTNET_B3: 1000,  # TODO: fill in
+    MODEL_EFFICIENTNET_B4: 1000,  # TODO: fill in
+    MODEL_EFFICIENTNET_B5: 15,
+    MODEL_EFFICIENTNET_B6: 1000,  # TODO: fill in
+    MODEL_EFFICIENTNET_B7: 1000,  # TODO: fill in
+}
+
 options = [
     RunOption(name="epochs", default=10, desc="Number of epoches for training."),
-    RunOption(name="batch_size", default=64, desc="Train batch size."),
+    RunOption(name="batch_size", default=None, desc="Train batch size.").integer(),
     RunOption(name="patience", default=3, desc="early stopping patience"),
     RunOption(name="lr_patience", default=1, desc="patience for learning rate"),
     RunOption(name="learning_rate", default=0.001, desc="Learning Rate"),
@@ -64,7 +88,16 @@ options = [
               desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
     RunOption(name="hair_augment", default=False, desc="add hair augmentation").flag(),
     RunOption(name="optim", default=OPTIM_ADAM, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW, OPTIM_SGD]),
-    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE, SCHED_DEOTTE])
+    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE, SCHED_DEOTTE]),
+    RunOption(name="model", default=MODEL_EFFICIENTNET_B0, desc="Model name").choice([
+        MODEL_EFFICIENTNET_B0,
+        MODEL_EFFICIENTNET_B1,
+        MODEL_EFFICIENTNET_B2,
+        MODEL_EFFICIENTNET_B3,
+        MODEL_EFFICIENTNET_B4,
+        MODEL_EFFICIENTNET_B5,
+        MODEL_EFFICIENTNET_B6,
+        MODEL_EFFICIENTNET_B7])
 ]
 
 
@@ -92,6 +125,7 @@ class RunOptions:
         self.hair_augment = None
         self.optim = None
         self.scheduler = None
+        self.model = None
         for option in options:
             self.__setattr__(option.name, option.default)
 
@@ -109,3 +143,12 @@ class RunOptions:
         if value is None:
             value = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._device = value
+
+    def post_init(self):
+        # batch size
+        if self.batch_size is None:
+            if self.model in batches:
+                self.batch_size = batches.get(self.model)
+            else:
+                raise Exception(f"there is no default batch for model {self.model}")
+
