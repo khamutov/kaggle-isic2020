@@ -40,8 +40,7 @@ import cli
 
 FOLDS = 5
 
-input_res = 384
-resolution = 384
+
 def get_train_transforms(config):
     return A.Compose([
             AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
@@ -62,7 +61,11 @@ def get_train_transforms(config):
                 A.RandomBrightnessContrast(),
                 A.HueSaturationValue(hue_shift_limit=0),
             ]),
-            A.Cutout(num_holes=8, max_h_size=resolution//8, max_w_size=resolution//8, fill_value=0, p=0.3),
+            A.Cutout(num_holes=8,
+                     max_h_size=config.input_size//8,
+                     max_w_size=config.input_size//8,
+                     fill_value=0,
+                     p=0.3),
             A.Normalize(),
             ToTensorV2(),
         ], p=1.0)
@@ -237,8 +240,8 @@ class EfficientNetwork(nn.Module):
 
 
 def load_dataset(config: cli.RunOptions):
-    train_df = pd.read_csv(config.dataset_malignant_256 / 'train.csv')
-    train_df_2019 = pd.read_csv(config.dataset_malignant_256_2019 / 'train.csv')
+    train_df = pd.read_csv(config.dataset_2020() / 'train.csv')
+    train_df_2019 = pd.read_csv(config.dataset_2019() / 'train.csv')
 
     train_df['fold'] = train_df['tfrecord']
     train_df_2019['fold'] = train_df_2019['tfrecord']
@@ -308,18 +311,18 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     patience = config.patience  # Best validation score within this fold
     model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
     train_dataset_2020 = MelanomaDataset(df=train_df,
-                                         imfolder=config.dataset_malignant_256 / 'train',
+                                         imfolder=config.dataset_2020() / 'train',
                                          is_train=True,
                                          transforms=train_transform,
                                          meta_features=meta_features)
     train_dataset_2018 = MelanomaDataset(df=train_df_2018,
-                                         imfolder=config.dataset_malignant_256_2019 / 'train',
+                                         imfolder=config.dataset_2019() / 'train',
                                          is_train=True,
                                          transforms=train_transform,
                                          meta_features=meta_features)
     train_dataset = torch.utils.data.ConcatDataset([train_dataset_2020, train_dataset_2018])
     val = MelanomaDataset(df=val_df,
-                          imfolder=config.dataset_malignant_256 / 'train',
+                          imfolder=config.dataset_2020() / 'train',
                           is_train=True,
                           transforms=test_transform,
                           meta_features=meta_features)
@@ -639,7 +642,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
 
     test = MelanomaDataset(df=test_df,
-                           imfolder=config.dataset_malignant_256 / 'test',
+                           imfolder=config.dataset_2020() / 'test',
                            is_train=False,
                            transforms=train_transform,
                            meta_features=meta_features)

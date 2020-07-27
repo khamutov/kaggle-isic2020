@@ -55,14 +55,26 @@ MODEL_EFFICIENTNET_B6 = "efficientnet-b6"
 MODEL_EFFICIENTNET_B7 = "efficientnet-b7"
 
 batches = {
-    MODEL_EFFICIENTNET_B0: 100,
-    MODEL_EFFICIENTNET_B1: 1000,  # TODO: fill in
-    MODEL_EFFICIENTNET_B2: 64,
-    MODEL_EFFICIENTNET_B3: 1000,  # TODO: fill in
-    MODEL_EFFICIENTNET_B4: 1000,  # TODO: fill in
-    MODEL_EFFICIENTNET_B5: 15,
-    MODEL_EFFICIENTNET_B6: 1000,  # TODO: fill in
-    MODEL_EFFICIENTNET_B7: 1000,  # TODO: fill in
+    256: {
+        MODEL_EFFICIENTNET_B0: 100,
+        MODEL_EFFICIENTNET_B1: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B2: 64,
+        MODEL_EFFICIENTNET_B3: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B4: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B5: 15,
+        MODEL_EFFICIENTNET_B6: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B7: 1000,  # TODO: fill in
+    },
+    384: {
+        MODEL_EFFICIENTNET_B0: 100,
+        MODEL_EFFICIENTNET_B1: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B2: 64,
+        MODEL_EFFICIENTNET_B3: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B4: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B5: 15,
+        MODEL_EFFICIENTNET_B6: 1000,  # TODO: fill in
+        MODEL_EFFICIENTNET_B7: 1000,  # TODO: fill in
+    },
 }
 
 options = [
@@ -75,8 +87,8 @@ options = [
     RunOption(name="lr_factor", default=0.4, desc=""),
     RunOption(name="loss_bce_label_smoothing", default=0.0, desc="Label smoothing for BCE loss"),
     RunOption(name="num_workers", default=0, desc="num epoches"),
-    RunOption(name="dataset_malignant_256", default=None, desc="path to external malignant-256 dataset").path(),
-    RunOption(name="dataset_malignant_256_2019", default=None, desc="path to external malignant-256 dataset 2019").path(),
+    RunOption(name="input_size", default=256, desc="input image sizes").integer().choice([256, 384]),
+    RunOption(name="datasets_path", default=None, desc="path to datasets directory").path(),
     RunOption(name="dataset_official", default=None, desc="path to official ISIC dataset").path(),
     RunOption(name="mlflow_tracking_url", default=None, desc="mlflow tracking url"),
     RunOption(name="mlflow_experiment", default=None, desc="mlflow tracking url"),
@@ -113,8 +125,8 @@ class RunOptions:
         self.lr_factor = None
         self.loss_bce_label_smoothing = None
         self.num_workers = None
-        self.dataset_malignant_256: Union[None, Path] = None
-        self.dataset_malignant_256_2019: Union[None, Path] = None
+        self.input_size = None
+        self.datasets_path: Union[None, Path] = None
         self.dataset_official: Union[None, Path] = None
         self.mlflow_tracking_url = None
         self.mlflow_experiment = None
@@ -147,8 +159,17 @@ class RunOptions:
     def post_init(self):
         # batch size
         if self.batch_size is None:
-            if self.model in batches:
-                self.batch_size = batches.get(self.model)
+            if self.input_size in batches:
+                res_batches = batches.get(self.input_size)
+                if self.model in res_batches:
+                    self.batch_size = res_batches.get(self.model)
+                else:
+                    raise Exception(f"there is no default batch for model {self.model}")
             else:
-                raise Exception(f"there is no default batch for model {self.model}")
+                raise Exception(f"there is no default batch for input size {self.input_size}")
 
+    def dataset_2020(self):
+        return self.datasets_path / f'jpeg-melanoma-{self.input_size}x{self.input_size}'
+
+    def dataset_2019(self):
+        return self.datasets_path / f'jpeg-isic2019-{self.input_size}x{self.input_size}'
