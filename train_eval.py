@@ -338,7 +338,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     model = model.to(config.device)
 
     pos_weight = torch.tensor([10]).to(config.device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="sum")
 
     if config.optim == cli.OPTIM_ADAM:
         optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
