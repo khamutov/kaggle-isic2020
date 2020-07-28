@@ -294,6 +294,7 @@ def load_dataset(config: cli.RunOptions):
 class TrainResult:
     best_val: float
     pred = None
+    pred_tta = None
     target = None
     names = None
 
@@ -326,6 +327,11 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
                           is_train=True,
                           transforms=test_transform,
                           meta_features=meta_features)
+    val_tta = MelanomaDataset(df=val_df,
+                              imfolder=config.dataset_2020() / 'train',
+                              is_train=True,
+                              transforms=train_transform,
+                              meta_features=meta_features)
     train_loader = DataLoader(dataset=train_dataset,
                               batch_size=config.batch_size,
                               shuffle=True,
@@ -333,10 +339,15 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
                               pin_memory=True,
                               drop_last=True)
     val_loader = DataLoader(dataset=val,
-                            batch_size=config.batch_size,
+                            batch_size=config.batch_size * 2,
                             shuffle=False,
                             num_workers=config.num_workers,
                             pin_memory=True)
+    val_tta_loader = DataLoader(dataset=val_tta,
+                                batch_size=config.batch_size * 2,
+                                shuffle=False,
+                                num_workers=config.num_workers,
+                                pin_memory=True)
 
     model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name=config.model)
     model = model.to(config.device)
@@ -485,34 +496,47 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     # val on best model
     model = torch.load(model_path)  # Loading best model of this fold
     model.eval()  # switch model to the evaluation mode
-    val_pred_arr = []
     with torch.no_grad():
         # Predicting on validation set once again to obtain data for OOF
+        fold_preds = torch.zeros((len(val_tta), 1), dtype=torch.float32, device=config.device)
+        fold_preds_tta = torch.zeros((len(val_tta), 1), dtype=torch.float32, device=config.device)
         val_targets_arr = []
-        for j, (x_val, y_val) in enumerate(val_loader):
+
+        for i, (x_val, y_val) in enumerate(tqdm(val_loader, desc='Predict no TTA', leave=False)):
             x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
             x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
             y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
             z_val = model(x_val[0], x_val[1])
             val_pred = torch.sigmoid(z_val)
-            val_pred_arr.append(val_pred.cpu().numpy())
-            val_targets_arr.append(y_val.cpu().numpy())
-        val_preds = np.concatenate(val_pred_arr)
 
-        train_result.pred = val_preds
+            fold_preds[i * val_loader.batch_size:i * val_loader.batch_size + x_val[0].shape[0]] += val_pred
+            val_targets_arr.append(y_val.cpu().numpy())
+
+        for _ in trange(config.tta, desc='TTA', leave=False):
+            for i, (x_val, y_val) in enumerate(tqdm(val_tta_loader, desc='Predict TTA', leave=False)):
+                x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
+                x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
+
+                z_val = model(x_val[0], x_val[1])
+                val_pred = torch.sigmoid(z_val)
+
+                fold_preds_tta[i * val_tta_loader.batch_size:i * val_tta_loader.batch_size + x_val[0].shape[0]] += val_pred
+        fold_preds_tta /= config.tta
+
+        train_result.pred = fold_preds.cpu().numpy()[:, 0]
+        train_result.pred_tta = fold_preds_tta.cpu().numpy()[:, 0]
         train_result.target = np.concatenate(val_targets_arr)
 
     train_result.best_val = best_val
 
     return train_result
 
-def identity(x):
-    return x
 
 def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
+    oof_pred_tta = []
     oof_target = []
     oof_val = []
     oof_folds = []
@@ -550,6 +574,7 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
                              fold_idx=fold_idx)
 
     oof_pred.append(train_result.pred)
+    oof_pred_tta.append(train_result.pred_tta)
     oof_target.append(train_result.target)
     oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
@@ -558,17 +583,21 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
         mlflow.end_run()
 
     oof = np.concatenate(oof_pred).squeeze()
+    oof_tta = np.concatenate(oof_pred_tta).squeeze()
     true = np.concatenate(oof_target)
     folds = np.concatenate(oof_folds)
     auc = roc_auc_score(true, oof)
+    auc_tta = roc_auc_score(true, oof_tta)
     names = np.concatenate(oof_names)
 
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
-    print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
+    print(Fore.MAGENTA, 'OOF ROC AUC    ', auc, Style.RESET_ALL)
+    print(Fore.MAGENTA, 'OOF ROC AUC TTA', auc_tta, Style.RESET_ALL)
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
 
     if config.is_track_mlflow():
         mlflow.log_metric("oof_roc_auc", auc)
+        mlflow.log_metric("oof_roc_auc_tta", auc_tta)
 
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
@@ -648,7 +677,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
                            transforms=train_transform,
                            meta_features=meta_features)
     test_loader = DataLoader(dataset=test,
-                             batch_size=config.batch_size,
+                             batch_size=config.batch_size * 2,
                              shuffle=False,
                              num_workers=config.num_workers,
                              pin_memory=True)
@@ -666,7 +695,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
                     x_test[1] = torch.tensor(x_test[1], device=config.device, dtype=torch.float32)
                     z_test = model(x_test[0], x_test[1])
                     z_test = torch.sigmoid(z_test)
-                    fold_preds[i * config.batch_size:i * config.batch_size + x_test[0].shape[0]] += z_test
+                    fold_preds[i * test_loader.batch_size:i * test_loader.batch_size + x_test[0].shape[0]] += z_test
             fold_preds /= config.tta
         preds += fold_preds
 
@@ -743,7 +772,7 @@ def train_cmd(config: cli.RunOptions):
 
     test_transform = A.Compose([
         AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-        if config.hair_augment else A.NoOp(),
+        if config.advanced_hair_augmentation else A.NoOp(),
         A.Normalize(),
         ToTensorV2(),
     ], p=1.0)

@@ -162,7 +162,7 @@ class RunOptions:
         self.hue_saturation_value = None
         self.cutout = None
         for option in options:
-            self.__setattr__(option.name, option.default)
+            self.__setattr__(option.name.split("/")[0], option.default)
 
     def is_track_mlflow(self):
         return self.mlflow_tracking_url is not None \
