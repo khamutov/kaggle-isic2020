@@ -116,8 +116,6 @@ options = [
         MODEL_EFFICIENTNET_B5,
         MODEL_EFFICIENTNET_B6,
         MODEL_EFFICIENTNET_B7]),
-    RunOption(name="output_path", default="./", desc="Path to save trained models")
-        MODEL_EFFICIENTNET_B7]),
     RunOption(name="advanced_hair_augmentation", default=False, desc="Augmentation AdvancedHairAugmentation").flag(),
     RunOption(name="jpeg_compression", default=True, desc="Augmentation JpegCompression").flag(),
     RunOption(name="rotate", default=True, desc="Augmentation Rotate").flag(),
@@ -130,6 +128,7 @@ options = [
     RunOption(name="random_brightness_contrast", default=True, desc="Augmentation RandomBrightnessContrast").flag(),
     RunOption(name="hue_saturation_value", default=True, desc="Augmentation HueSaturationValue").flag(),
     RunOption(name="cutout", default=True, desc="Augmentation Cutout").flag(),
+    RunOption(name="output_path", default="./", desc="Path to save trained models")
 ]
 
 
@@ -219,14 +218,10 @@ class RunOptions:
 
             mlflow.set_tracking_uri(self.mlflow_tracking_url)
             mlflow.set_experiment(self.mlflow_experiment)
-
             run_info = mlflow.start_run()
             self.output_path = f"model/{self.model}/{run_info.info.run_id}/"
-
             mlflow.log_params(self.__dict__)
-
-
-
+        Path(self.output_path).mkdir(parents=True, exist_ok=True)
 
         try:
             set_start_method('spawn')
