@@ -44,28 +44,28 @@ FOLDS = 5
 def get_train_transforms(config):
     return A.Compose([
             AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-            if config.hair_augment else A.NoOp(),
-            A.JpegCompression(p=0.5),
-            A.Rotate(limit=80, p=1.0),
+            if config.advanced_hair_augmentation else A.NoOp(),
+            A.JpegCompression(p=0.5) if config.jpeg_compression else A.NoOp(),
+            A.Rotate(limit=80, p=1.0) if config.rotate else A.NoOp(),
             A.OneOf([
-                A.OpticalDistortion(),
-                A.GridDistortion(),
-                A.IAAPiecewiseAffine(),
+                A.OpticalDistortion() if config.optical_distortion else A.NoOp(),
+                A.GridDistortion() if config.grid_distortion else A.NoOp(),
+                A.IAAPiecewiseAffine() if config.piecewise_affine else A.NoOp(),
             ]),
             # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
             #                   height=resolution, width=resolution, p=1.0),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.GaussianBlur(p=0.3),
+            A.HorizontalFlip(p=0.5) if not config.horizontal_flip else A.NoOp(),
+            A.VerticalFlip(p=0.5) if not config.vertical_flip else A.NoOp(),
+            A.GaussianBlur(p=0.3) if not config.gaussian_blur else A.NoOp(),
             A.OneOf([
-                A.RandomBrightnessContrast(),
-                A.HueSaturationValue(hue_shift_limit=0),
+                A.RandomBrightnessContrast() if not config.random_brightness_contrast else A.NoOp(),
+                A.HueSaturationValue(hue_shift_limit=0) if not config.hue_saturation_value else A.NoOp(),
             ]),
             A.Cutout(num_holes=8,
                      max_h_size=config.input_size//8,
                      max_w_size=config.input_size//8,
                      fill_value=0,
-                     p=0.3),
+                     p=0.3) if not config.cutout else A.NoOp(),
             A.Normalize(),
             ToTensorV2(),
         ], p=1.0)
@@ -458,6 +458,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
                   str(datetime.timedelta(seconds=time.time() - start_time)))
 
             if config.is_track_mlflow():
+                mlflow.active_run()
                 mlflow.log_metric("train_loss", train_loss, step=epoch)
                 mlflow.log_metric("val_loss", val_loss, step=epoch)
                 mlflow.log_metric("train_acc", train_acc, step=epoch)
