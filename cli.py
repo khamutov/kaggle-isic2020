@@ -8,7 +8,7 @@ import mlflow
 import torch
 from tqdm import tqdm
 
-from train_eval import seed_everything
+from utils.seeds import seed_everything
 
 
 class RunOption:
