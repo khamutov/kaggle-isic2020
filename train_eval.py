@@ -7,6 +7,7 @@ import sys
 import time
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 import configobj
@@ -302,7 +303,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, mlflow_run_info=None, fold_idx=0) -> (TrainResult, str):
+def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -310,11 +311,8 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
 
     best_val = None
     patience = config.patience  # Best validation score within this fold
-    model_path = None
-    if mlflow_run_info:
-        model_path = f'{config.model}/{mlflow_run_info.info.run_id}/model{fold_idx}.pth'
-    else:
-        model_path = f'{config.model}/not_estimated/model{fold_idx}.pth'
+
+    model_path = Path(config.output_path) / f"model{fold_idx}.pth"
 
     train_dataset_2020 = MelanomaDataset(df=train_df,
                                          imfolder=config.dataset_2020() / 'train',
@@ -534,7 +532,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
 
     train_result.best_val = best_val
 
-    return train_result, model_path
+    return train_result
 
 
 def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
@@ -570,7 +568,7 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
     train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
     val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-    train_result, model_path = train_fit(train_df=train_fit_df,
+    train_result = train_fit(train_df=train_fit_df,
                              train_df_2018=train_fit_df_2018,
                              val_df=val_fit_df,
                              train_transform=train_transform,
@@ -609,8 +607,6 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
     df_oof.to_csv('oof.csv', index=False)
-    return model_path
-
 
 def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform) -> str:
     train_len = len(train_df)
@@ -680,7 +676,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     return model_path
 
 
-def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform, model_path):
+def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform):
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
 
     test = MelanomaDataset(df=test_df,
@@ -696,8 +692,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
 
     preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
     for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
-        model_p = "/".join(model_path.split("/")[:-1]) + "/" + f"model{fold_idx}.pth"
-        model = torch.load(model_p)
+        model = torch.load(Path(config.output_path) / f"model{fold_idx}.pth")
         model.eval()  # switch model to the evaluation mode
 
         fold_preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
@@ -722,37 +717,13 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
 
 
 def train_cmd(config: cli.RunOptions):
-    tqdm.pandas()
-    warnings.filterwarnings("ignore")
 
-    seed = 1234
-    seed_everything(seed)
-
-    # check device available
-    _tmp_tensor = torch.rand(1).to(config.device)
-    del _tmp_tensor
-    
-    torch.cuda.set_device(config.device)
-
-    if config.is_track_mlflow():
-        if not config.mlflow_experiment:
-            raise Exception("mlflow experiment not set! Use option --mlflow_experiment")
-
-        mlflow.set_tracking_uri(config.mlflow_tracking_url)
-        mlflow.set_experiment(config.mlflow_experiment)
-
-        mlflow.log_params(config.__dict__)
 
     train_df, train_df_2019, test_df, meta_features = load_dataset(config)
 
     if config.dry_run:
         train_df = train_df.head(640)
         train_df_2019 = train_df_2019.head(640)
-
-    try:
-        set_start_method('spawn')
-    except RuntimeError:
-        pass
 
     train_transform = get_train_transforms(config)
     # train_transform = transforms.Compose([
@@ -791,7 +762,7 @@ def train_cmd(config: cli.RunOptions):
     ], p=1.0)
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
-    model_path = train_fn(train_df=train_df,
+    train_fn(train_df=train_df,
              train_df_2018=train_df_2019,
              meta_features=meta_features,
              config=config,
@@ -805,8 +776,7 @@ def train_cmd(config: cli.RunOptions):
                       meta_features=meta_features,
                       config=config,
                       train_transform=train_transform,
-                      test_transform=test_transform,
-                      model_path=model_path)
+                      test_transform=test_transform)
 
 
 class CommanCLI(click.MultiCommand):

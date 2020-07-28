@@ -1,8 +1,14 @@
+import warnings
+from multiprocessing import set_start_method
 from pathlib import Path
 from typing import Any, Union
 
 import click
+import mlflow
 import torch
+from tqdm import tqdm
+
+from train_eval import seed_everything
 
 
 class RunOption:
@@ -110,6 +116,8 @@ options = [
         MODEL_EFFICIENTNET_B5,
         MODEL_EFFICIENTNET_B6,
         MODEL_EFFICIENTNET_B7]),
+    RunOption(name="output_path", default="./", desc="Path to save trained models")
+        MODEL_EFFICIENTNET_B7]),
     RunOption(name="advanced_hair_augmentation", default=False, desc="Augmentation AdvancedHairAugmentation").flag(),
     RunOption(name="jpeg_compression", default=True, desc="Augmentation JpegCompression").flag(),
     RunOption(name="rotate", default=True, desc="Augmentation Rotate").flag(),
@@ -161,6 +169,7 @@ class RunOptions:
         self.random_brightness_contrast = None
         self.hue_saturation_value = None
         self.cutout = None
+        self.output_path = None
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
@@ -191,6 +200,40 @@ class RunOptions:
                     raise Exception(f"there is no default batch for model {self.model}")
             else:
                 raise Exception(f"there is no default batch for input size {self.input_size}")
+
+        tqdm.pandas()
+        warnings.filterwarnings("ignore")
+
+        seed = 1234
+        seed_everything(seed)
+
+        # check device available
+        _tmp_tensor = torch.rand(1).to(self.device)
+        del _tmp_tensor
+
+        torch.cuda.set_device(self.device)
+
+        if self.is_track_mlflow():
+            if not self.mlflow_experiment:
+                raise Exception("mlflow experiment not set! Use option --mlflow_experiment")
+
+            mlflow.set_tracking_uri(self.mlflow_tracking_url)
+            mlflow.set_experiment(self.mlflow_experiment)
+
+            run_info = mlflow.start_run()
+            self.output_path = f"model/{self.model}/{run_info.info.run_id}/"
+
+            mlflow.log_params(self.__dict__)
+
+
+
+
+        try:
+            set_start_method('spawn')
+        except RuntimeError:
+            pass
+
+
 
     def dataset_2020(self):
         return self.datasets_path / f'jpeg-melanoma-{self.input_size}x{self.input_size}'
