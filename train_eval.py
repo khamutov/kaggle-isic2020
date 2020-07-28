@@ -509,7 +509,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
             z_val = model(x_val[0], x_val[1])
             val_pred = torch.sigmoid(z_val)
 
-            fold_preds[i * config.batch_size:i * config.batch_size + x_val[0].shape[0]] += val_pred
+            fold_preds[i * val_loader.batch_size:i * val_loader.batch_size + x_val[0].shape[0]] += val_pred
             val_targets_arr.append(y_val.cpu().numpy())
 
         for _ in trange(config.tta, desc='TTA', leave=False):
@@ -520,7 +520,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
                 z_val = model(x_val[0], x_val[1])
                 val_pred = torch.sigmoid(z_val)
 
-                fold_preds_tta[i * config.batch_size:i * config.batch_size + x_val[0].shape[0]] += val_pred
+                fold_preds_tta[i * val_tta_loader.batch_size:i * val_tta_loader.batch_size + x_val[0].shape[0]] += val_pred
         fold_preds_tta /= config.tta
 
         train_result.pred = fold_preds.cpu().numpy()[:, 0]
@@ -677,7 +677,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
                            transforms=train_transform,
                            meta_features=meta_features)
     test_loader = DataLoader(dataset=test,
-                             batch_size=config.batch_size,
+                             batch_size=config.batch_size * 2,
                              shuffle=False,
                              num_workers=config.num_workers,
                              pin_memory=True)
@@ -695,7 +695,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
                     x_test[1] = torch.tensor(x_test[1], device=config.device, dtype=torch.float32)
                     z_test = model(x_test[0], x_test[1])
                     z_test = torch.sigmoid(z_test)
-                    fold_preds[i * config.batch_size:i * config.batch_size + x_test[0].shape[0]] += z_test
+                    fold_preds[i * test_loader.batch_size:i * test_loader.batch_size + x_test[0].shape[0]] += z_test
             fold_preds /= config.tta
         preds += fold_preds
 
