@@ -302,7 +302,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
+def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, mlflow_run_info, fold_idx=0) -> (TrainResult, str):
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -310,7 +310,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
 
     best_val = None
     patience = config.patience  # Best validation score within this fold
-    model_path = 'model{Fold}.pth'.format(Fold=fold_idx)
+    model_path = f'{config.model}/{mlflow_run_info.info.run_id}/model_fold{fold_idx}.pth'
     train_dataset_2020 = MelanomaDataset(df=train_df,
                                          imfolder=config.dataset_2020() / 'train',
                                          is_train=True,
@@ -529,7 +529,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
 
     train_result.best_val = best_val
 
-    return train_result
+    return train_result, model_path
 
 
 def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
@@ -552,8 +552,9 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
 
     oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
 
+    run_info = None
     if config.is_track_mlflow():
-        mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
+        run_info = mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
         mlflow.log_param("fold", fold_idx)
 
     print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'No CV mode', fold_idx, Style.RESET_ALL, Fore.CYAN,
@@ -564,13 +565,14 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
     train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
     val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-    train_result = train_fit(train_df=train_fit_df,
+    train_result, model_path = train_fit(train_df=train_fit_df,
                              train_df_2018=train_fit_df_2018,
                              val_df=val_fit_df,
                              train_transform=train_transform,
                              test_transform=test_transform,
                              meta_features=meta_features,
                              config=config,
+                             mlflow_run_info=run_info,
                              fold_idx=fold_idx)
 
     oof_pred.append(train_result.pred)
@@ -602,9 +604,10 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
     df_oof.to_csv('oof.csv', index=False)
+    return model_path
 
 
-def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
+def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform) -> str:
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -613,6 +616,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     oof_folds = []
     oof_names = []
 
+    model_path = ""
     skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
     for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
         train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
@@ -621,8 +625,9 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
 
         oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
 
+        run_info = None
         if config.is_track_mlflow():
-            mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
+            run_info = mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
             mlflow.log_param("fold", fold_idx)
 
         print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN,
@@ -633,13 +638,14 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
         train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
         val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-        train_result = train_fit(train_df=train_fit_df,
+        train_result, model_path = train_fit(train_df=train_fit_df,
                                  train_df_2018=train_fit_df_2018,
                                  val_df=val_fit_df,
                                  train_transform=train_transform,
                                  test_transform=test_transform,
                                  meta_features=meta_features,
                                  config=config,
+                                 mlflow_run_info=run_info,
                                  fold_idx=fold_idx)
 
         oof_pred.append(train_result.pred)
@@ -666,9 +672,10 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
     df_oof.to_csv('oof.csv', index=False)
+    return model_path
 
 
-def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform):
+def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform, model_path):
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
 
     test = MelanomaDataset(df=test_df,
@@ -684,7 +691,7 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
 
     preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
     for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
-        model = torch.load(f'model{fold_idx}.pth')
+        model = torch.load(model_path)
         model.eval()  # switch model to the evaluation mode
 
         fold_preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
@@ -778,7 +785,7 @@ def train_cmd(config: cli.RunOptions):
     ], p=1.0)
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
-    train_fn(train_df=train_df,
+    model_path = train_fn(train_df=train_df,
              train_df_2018=train_df_2019,
              meta_features=meta_features,
              config=config,
@@ -792,7 +799,8 @@ def train_cmd(config: cli.RunOptions):
                       meta_features=meta_features,
                       config=config,
                       train_transform=train_transform,
-                      test_transform=test_transform)
+                      test_transform=test_transform,
+                      model_path=model_path)
 
 
 class CommanCLI(click.MultiCommand):
