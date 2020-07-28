@@ -1,7 +1,6 @@
 import datetime
 import math
 import os
-import random
 import signal
 import sys
 import time
@@ -78,23 +77,6 @@ def signal_handler(_sig, _frame):
 
 
 signal.signal(signal.SIGINT, signal_handler)
-
-
-def seed_everything(seed_value):
-    random.seed(seed_value)
-    np.random.seed(seed_value)
-    torch.manual_seed(seed_value)
-    os.environ['PYTHONHASHSEED'] = str(seed_value)
-
-    if torch.cuda.is_available():
-        # noinspection PyUnresolvedReferences
-        torch.cuda.manual_seed(seed_value)
-        # noinspection PyUnresolvedReferences
-        torch.cuda.manual_seed_all(seed_value)
-        # noinspection PyUnresolvedReferences
-        torch.backends.cudnn.deterministic = True
-        # noinspection PyUnresolvedReferences
-        torch.backends.cudnn.benchmark = True
 
 
 # from huggingface transformers
