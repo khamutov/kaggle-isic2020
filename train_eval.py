@@ -302,7 +302,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, mlflow_run_info, fold_idx=0) -> (TrainResult, str):
+def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, mlflow_run_info=None, fold_idx=0) -> (TrainResult, str):
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -310,7 +310,12 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
 
     best_val = None
     patience = config.patience  # Best validation score within this fold
-    model_path = f'{config.model}/{mlflow_run_info.info.run_id}/model_fold{fold_idx}.pth'
+    model_path = None
+    if mlflow_run_info:
+        model_path = f'{config.model}/{mlflow_run_info.info.run_id}/model{fold_idx}.pth'
+    else:
+        model_path = f'{config.model}/not_estimated/model{fold_idx}.pth'
+
     train_dataset_2020 = MelanomaDataset(df=train_df,
                                          imfolder=config.dataset_2020() / 'train',
                                          is_train=True,
@@ -691,7 +696,8 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
 
     preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
     for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
-        model = torch.load(model_path)
+        model_p = "/".join(model_path.split("/")[:-1]) + "/" + f"model{fold_idx}.pth"
+        model = torch.load(model_p)
         model.eval()  # switch model to the evaluation mode
 
         fold_preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
