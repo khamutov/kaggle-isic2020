@@ -518,7 +518,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     return train_result
 
 
-def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
+def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOptions, train_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -564,7 +564,7 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config, train_tran
     oof_target.append(train_result.target)
     oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
-    if config.is_track_mlflow():
+    if config.is_track_mlflow() and config.train:
         mlflow.log_metric("best_roc_auc", train_result.best_val)
         mlflow.end_run()
 
