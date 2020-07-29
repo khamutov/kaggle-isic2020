@@ -84,6 +84,7 @@ batches = {
     },
 }
 
+OUTPUT_DEFAULT_PATH = "./"
 options = [
     RunOption(name="epochs", default=10, desc="Number of epoches for training."),
     RunOption(name="batch_size", default=None, desc="Train batch size.").integer(),
@@ -128,7 +129,7 @@ options = [
     RunOption(name="random_brightness_contrast", default=True, desc="Augmentation RandomBrightnessContrast").flag(),
     RunOption(name="hue_saturation_value", default=True, desc="Augmentation HueSaturationValue").flag(),
     RunOption(name="cutout", default=True, desc="Augmentation Cutout").flag(),
-    RunOption(name="output_path", default="./", desc="Path to save trained models"),
+    RunOption(name="output_path", default=OUTPUT_DEFAULT_PATH, desc="Path to save trained models"),
     RunOption(name="train", default=True, desc="Enable/disable train").flag()
 ]
 
@@ -221,7 +222,10 @@ class RunOptions:
             mlflow.set_tracking_uri(self.mlflow_tracking_url)
             mlflow.set_experiment(self.mlflow_experiment)
             run_info = mlflow.start_run()
-            self.output_path = f"model/{self.model}/{run_info.info.run_id}/"
+
+            # overrride output path if not set
+            if self.output_path == OUTPUT_DEFAULT_PATH:
+                self.output_path = f"model/{self.model}/{run_info.info.run_id}/"
             mlflow.log_params(self.__dict__)
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
 
