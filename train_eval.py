@@ -564,8 +564,9 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
     oof_target.append(train_result.target)
     oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
-    if config.is_track_mlflow() and config.train:
-        mlflow.log_metric("best_roc_auc", train_result.best_val)
+    if config.is_track_mlflow():
+        if train_result.best_val:
+            mlflow.log_metric("best_roc_auc", train_result.best_val)
         mlflow.end_run()
 
     oof = np.concatenate(oof_pred).squeeze()
