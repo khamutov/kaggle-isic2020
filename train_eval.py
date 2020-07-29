@@ -381,102 +381,103 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     else:
         raise Exception(f"unknown scheduler {config.scheduler}")
 
-    for epoch in trange(config.epochs, desc='Epoch'):
-        start_time = time.time()
-        correct = 0
-        train_losses = 0
-        val_losses = 0
+    if config.train:
+        for epoch in trange(config.epochs, desc='Epoch'):
+            start_time = time.time()
+            correct = 0
+            train_losses = 0
+            val_losses = 0
 
-        model.train()  # Set the model in train mode
+            model.train()  # Set the model in train mode
 
-        for data, labels in tqdm(train_loader, desc='Batch', leave=False):
-            data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
-            data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
-            labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
+            for data, labels in tqdm(train_loader, desc='Batch', leave=False):
+                data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
+                data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
+                labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
 
-            y_smooth = labels.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
+                y_smooth = labels.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
 
-            # Clear gradients first; very important, usually done BEFORE prediction
-            optimizer.zero_grad()
+                # Clear gradients first; very important, usually done BEFORE prediction
+                optimizer.zero_grad()
 
-            # Log Probabilities & Backpropagation
-            out = model(data[0], data[1])
-            loss = criterion(out, y_smooth.unsqueeze(1))
-            loss.backward()
-            optimizer.step()
+                # Log Probabilities & Backpropagation
+                out = model(data[0], data[1])
+                loss = criterion(out, y_smooth.unsqueeze(1))
+                loss.backward()
+                optimizer.step()
 
-            scheduler.step()
+                scheduler.step()
 
-            # --- Save information after this batch ---
-            # Save loss
-            # From log probabilities to actual probabilities
-            # 0 and 1
-            train_preds = torch.round(torch.sigmoid(out))
-            train_losses += loss.item()
+                # --- Save information after this batch ---
+                # Save loss
+                # From log probabilities to actual probabilities
+                # 0 and 1
+                train_preds = torch.round(torch.sigmoid(out))
+                train_losses += loss.item()
 
-            # Number of correct predictions
-            correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
+                # Number of correct predictions
+                correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
 
-        # Compute Train Accuracy
-        train_acc = correct / len(train_dataset)
-        model.eval()  # switch model to the evaluation mode
-        val_pred_arr = []
-        with torch.no_grad():  # Do not calculate gradient since we are only predicting
+            # Compute Train Accuracy
+            train_acc = correct / len(train_dataset)
+            model.eval()  # switch model to the evaluation mode
+            val_pred_arr = []
+            with torch.no_grad():  # Do not calculate gradient since we are only predicting
 
-            for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
-                data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
-                data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
-                label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
+                for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
+                    data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
+                    data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
+                    label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
 
-                y_smooth = label_val.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
+                    y_smooth = label_val.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
 
-                z_val = model(data_val[0], data_val[1])
+                    z_val = model(data_val[0], data_val[1])
 
-                loss = criterion(z_val, y_smooth.unsqueeze(1))
-                val_losses += loss.item()
+                    loss = criterion(z_val, y_smooth.unsqueeze(1))
+                    val_losses += loss.item()
 
-                val_pred = torch.sigmoid(z_val)
-                val_pred_arr.append(val_pred.cpu().numpy())
-            val_preds = np.concatenate(val_pred_arr)
-            val_acc = accuracy_score(val_df['target'].values, np.round(val_preds))
-            val_roc = roc_auc_score(val_df['target'].values, val_preds)
+                    val_pred = torch.sigmoid(z_val)
+                    val_pred_arr.append(val_pred.cpu().numpy())
+                val_preds = np.concatenate(val_pred_arr)
+                val_acc = accuracy_score(val_df['target'].values, np.round(val_preds))
+                val_roc = roc_auc_score(val_df['target'].values, val_preds)
 
-            epochval = epoch + 1
+                epochval = epoch + 1
 
-            train_loss = train_losses / len(train_dataset)
-            val_loss = val_losses / len(val)
+                train_loss = train_losses / len(train_dataset)
+                val_loss = val_losses / len(val)
 
-            print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|',
-                  Fore.CYAN, 'Loss: ', Style.RESET_ALL, train_loss, '|',
-                  Fore.BLUE, ' Val loss: ', Style.RESET_ALL, val_loss, '|',
-                  Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc, '|',
-                  Fore.YELLOW, ' Training time:', Style.RESET_ALL,
-                  str(datetime.timedelta(seconds=time.time() - start_time)))
+                print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|',
+                      Fore.CYAN, 'Loss: ', Style.RESET_ALL, train_loss, '|',
+                      Fore.BLUE, ' Val loss: ', Style.RESET_ALL, val_loss, '|',
+                      Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc, '|',
+                      Fore.YELLOW, ' Training time:', Style.RESET_ALL,
+                      str(datetime.timedelta(seconds=time.time() - start_time)))
 
-            if config.is_track_mlflow():
-                mlflow.active_run()
-                mlflow.log_metric("train_loss", train_loss, step=epoch)
-                mlflow.log_metric("val_loss", val_loss, step=epoch)
-                mlflow.log_metric("train_acc", train_acc, step=epoch)
-                mlflow.log_metric("val_acc", val_acc, step=epoch)
-                mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
+                if config.is_track_mlflow():
+                    mlflow.active_run()
+                    mlflow.log_metric("train_loss", train_loss, step=epoch)
+                    mlflow.log_metric("val_loss", val_loss, step=epoch)
+                    mlflow.log_metric("train_acc", train_acc, step=epoch)
+                    mlflow.log_metric("val_acc", val_acc, step=epoch)
+                    mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
 
-            # scheduler.step(val_roc)
-            # During the first iteratsion (first epoch) best validation is set to None
-            if not best_val:
-                best_val = val_roc  # So any validation roc_auc we have is the best one for now
-                torch.save(model, model_path)  # Saving the model
-                continue
+                # scheduler.step(val_roc)
+                # During the first iteratsion (first epoch) best validation is set to None
+                if not best_val:
+                    best_val = val_roc  # So any validation roc_auc we have is the best one for now
+                    torch.save(model, model_path)  # Saving the model
+                    continue
 
-            if val_roc >= best_val:
-                best_val = val_roc
-                patience = config.patience  # Resetting patience since we have new best validation accuracy
-                torch.save(model, model_path)  # Saving current best model
-            else:
-                patience -= 1
-                if patience == 0:
-                    print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
-                    break
+                if val_roc >= best_val:
+                    best_val = val_roc
+                    patience = config.patience  # Resetting patience since we have new best validation accuracy
+                    torch.save(model, model_path)  # Saving current best model
+                else:
+                    patience -= 1
+                    if patience == 0:
+                        print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
+                        break
 
     # val on best model
     model = torch.load(model_path)  # Loading best model of this fold

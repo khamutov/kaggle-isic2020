@@ -128,7 +128,8 @@ options = [
     RunOption(name="random_brightness_contrast", default=True, desc="Augmentation RandomBrightnessContrast").flag(),
     RunOption(name="hue_saturation_value", default=True, desc="Augmentation HueSaturationValue").flag(),
     RunOption(name="cutout", default=True, desc="Augmentation Cutout").flag(),
-    RunOption(name="output_path", default="./", desc="Path to save trained models")
+    RunOption(name="output_path", default="./", desc="Path to save trained models"),
+    RunOption(name="train", default=True, desc="Enable/disable train").flag()
 ]
 
 
@@ -169,6 +170,7 @@ class RunOptions:
         self.hue_saturation_value = None
         self.cutout = None
         self.output_path = None
+        self.train = None
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
