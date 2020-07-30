@@ -1,3 +1,4 @@
+import os
 import warnings
 from multiprocessing import set_start_method
 from pathlib import Path
@@ -225,7 +226,7 @@ class RunOptions:
 
             # overrride output path if not set
             if self.output_path == OUTPUT_DEFAULT_PATH:
-                self.output_path = f"model/{self.model}/{run_info.info.run_id}/"
+                self.output_path = f"{os.getcwd()}/model/{self.model}/{run_info.info.run_id}/"
             mlflow.log_params(self.__dict__)
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
 
