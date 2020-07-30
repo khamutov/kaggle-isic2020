@@ -633,7 +633,8 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
         oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
         if config.is_track_mlflow():
-            mlflow.log_metric("best_roc_auc", train_result.best_val)
+            if train_result.best_val:
+                mlflow.log_metric("best_roc_auc", train_result.best_val)
             mlflow.end_run()
 
     oof = np.concatenate(oof_pred).squeeze()
