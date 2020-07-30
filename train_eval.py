@@ -594,6 +594,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
+    oof_pred_tta = []
     oof_target = []
     oof_val = []
     oof_folds = []
@@ -629,6 +630,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
                                  fold_idx=fold_idx)
 
         oof_pred.append(train_result.pred)
+        oof_pred_tta.append(train_result.pred_tta)
         oof_target.append(train_result.target)
         oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
 
@@ -638,13 +640,16 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
             mlflow.end_run()
 
     oof = np.concatenate(oof_pred).squeeze()
+    oof_tta = np.concatenate(oof_pred_tta).squeeze()
     true = np.concatenate(oof_target)
     folds = np.concatenate(oof_folds)
     auc = roc_auc_score(true, oof)
+    auc_tta = roc_auc_score(true, oof_tta)
     names = np.concatenate(oof_names)
 
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
     print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
+    print(Fore.MAGENTA, 'OOF ROC AUC TTA', auc_tta, Style.RESET_ALL)
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
 
     if config.is_track_mlflow():
