@@ -58,7 +58,7 @@ def get_tta_transforms(config):
             A.VerticalFlip(p=0.5),
             A.NoOp(),
             A.OneOf([
-                A.RandomBrightnessContrast(),
+                A.NoOp(),
                 A.HueSaturationValue(hue_shift_limit=0),
             ]),
             A.NoOp(),
