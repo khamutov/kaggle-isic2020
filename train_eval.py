@@ -80,8 +80,8 @@ def get_train_transforms(config):
             ]),
             # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
             #                   height=resolution, width=resolution, p=1.0),
-            A.HorizontalFlip(p=0.5) if not config.horizontal_flip else A.NoOp(),
-            A.VerticalFlip(p=0.5) if not config.vertical_flip else A.NoOp(),
+            A.HorizontalFlip(p=0.5) if config.horizontal_flip else A.NoOp(),
+            A.VerticalFlip(p=0.5) if config.vertical_flip else A.NoOp(),
             A.GaussianBlur(p=0.3) if not config.gaussian_blur else A.NoOp(),
             A.OneOf([
                 A.RandomBrightnessContrast() if not config.random_brightness_contrast else A.NoOp(),
