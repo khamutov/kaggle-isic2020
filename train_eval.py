@@ -7,6 +7,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+import random
 
 import click
 import configobj
@@ -39,6 +40,31 @@ with warnings.catch_warnings():
 import cli
 
 FOLDS = 5
+
+
+def get_tta_transforms(config):
+    return A.Compose([
+            A.NoOp(),  # it's here because it calls random.random and change results
+            A.JpegCompression(p=0.5),
+            A.Rotate(limit=80, p=1.0),
+            A.OneOf([
+                A.NoOp(),
+                A.GridDistortion() if config.grid_distortion else A.NoOp(),
+                A.NoOp(),
+            ]),
+            # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
+            #                   height=resolution, width=resolution, p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.NoOp(),
+            A.OneOf([
+                A.RandomBrightnessContrast(),
+                A.HueSaturationValue(hue_shift_limit=0),
+            ]),
+            A.NoOp(),
+            A.Normalize(),
+            ToTensorV2(),
+        ], p=1.0)
 
 
 def get_train_transforms(config):
@@ -285,7 +311,7 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
+def train_fit(train_df, train_df_2018, val_df, train_transform, tta_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -315,7 +341,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     val_tta = MelanomaDataset(df=val_df,
                               imfolder=config.dataset_2020() / 'train',
                               is_train=True,
-                              transforms=train_transform,
+                              transforms=tta_transform,
                               meta_features=meta_features)
     train_loader = DataLoader(dataset=train_dataset,
                               batch_size=config.batch_size,
@@ -518,7 +544,7 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, test_transform, 
     return train_result
 
 
-def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOptions, train_transform, test_transform):
+def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOptions, train_transform, tta_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -554,6 +580,7 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
                              train_df_2018=train_fit_df_2018,
                              val_df=val_fit_df,
                              train_transform=train_transform,
+                             tta_transform=tta_transform,
                              test_transform=test_transform,
                              meta_features=meta_features,
                              config=config,
@@ -590,7 +617,8 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
     df_oof.to_csv('oof.csv', index=False)
 
-def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, test_transform):
+
+def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, tta_transform, test_transform):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -624,6 +652,7 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
                                  train_df_2018=train_fit_df_2018,
                                  val_df=val_fit_df,
                                  train_transform=train_transform,
+                                 tta_transform=tta_transform,
                                  test_transform=test_transform,
                                  meta_features=meta_features,
                                  config=config,
@@ -660,13 +689,13 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     df_oof.to_csv('oof.csv', index=False)
 
 
-def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, test_transform):
+def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, tta_transform, test_transform):
     print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
 
     test = MelanomaDataset(df=test_df,
                            imfolder=config.dataset_2020() / 'test',
                            is_train=False,
-                           transforms=train_transform,
+                           transforms=tta_transform,
                            meta_features=meta_features)
     test_loader = DataLoader(dataset=test,
                              batch_size=config.batch_size * 2,
@@ -702,7 +731,6 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
 
 def train_cmd(config: cli.RunOptions):
 
-
     train_df, train_df_2019, test_df, meta_features = load_dataset(config)
 
     if config.dry_run:
@@ -710,37 +738,9 @@ def train_cmd(config: cli.RunOptions):
         train_df_2019 = train_df_2019.head(640)
 
     train_transform = get_train_transforms(config)
-    # train_transform = transforms.Compose([
-    #     AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-    #         if config.hair_augment
-    #         else identity,
-    #     transforms.RandomResizedCrop(size=256, scale=(0.7, 1.0)),
-    #     transforms.RandomApply([
-    #         transforms.RandomChoice([
-    #                                     transforms.RandomAffine(degrees=20),
-    #                                     transforms.RandomAffine(degrees=0, scale=(0.1, 0.15)),
-    #                                     transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
-    #                                     # transforms.RandomAffine(degrees=0,shear=0.15),
-    #                                     transforms.RandomHorizontalFlip(p=1.0)
-    #                                 ])
-    #     ], p=0.5),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.RandomVerticalFlip(),
-    #     transforms.ColorJitter(brightness=32. / 255., contrast=0.2, saturation=0.3, hue=0.01),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    # ])
-    # test_transform = transforms.Compose([
-    #     AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-    #         if config.hair_augment
-    #         else identity,
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    # ])
+    tta_transform = get_tta_transforms(config)
 
     test_transform = A.Compose([
-        AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-        if config.advanced_hair_augmentation else A.NoOp(),
         A.Normalize(),
         ToTensorV2(),
     ], p=1.0)
@@ -751,6 +751,7 @@ def train_cmd(config: cli.RunOptions):
              meta_features=meta_features,
              config=config,
              train_transform=train_transform,
+             tta_transform=tta_transform,
              test_transform=test_transform)
 
     if config.no_cv:
@@ -760,6 +761,7 @@ def train_cmd(config: cli.RunOptions):
                       meta_features=meta_features,
                       config=config,
                       train_transform=train_transform,
+                      tta_transform=tta_transform,
                       test_transform=test_transform)
 
 
