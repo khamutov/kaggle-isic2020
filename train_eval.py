@@ -12,14 +12,16 @@ import random
 import click
 import configobj
 import cv2
-import mlflow
+try:
+    import mlflow
+except:
+    print("Run without mlflow")
 import numpy as np
 import pandas as pd
 # PyTorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchtoolbox.transform as transforms
 from colorama import Fore, Style
 from efficientnet_pytorch import EfficientNet
 from sklearn.metrics import accuracy_score, roc_auc_score
@@ -88,10 +90,10 @@ def get_train_transforms(config):
                 A.HueSaturationValue(hue_shift_limit=0) if not config.hue_saturation_value else A.NoOp(),
             ]),
             A.Cutout(num_holes=8,
-                     max_h_size=config.input_size//8,
-                     max_w_size=config.input_size//8,
+                     max_h_size=config.input_size//5,
+                     max_w_size=config.input_size//5,
                      fill_value=0,
-                     p=0.3) if not config.cutout else A.NoOp(),
+                     p=0.75) if config.cutout else A.NoOp(),
             A.Normalize(),
             ToTensorV2(),
         ], p=1.0)
