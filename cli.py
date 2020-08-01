@@ -173,6 +173,7 @@ class RunOptions:
         self.cutout = None
         self.output_path = None
         self.train = None
+        self.pos_weight = 10.0
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
@@ -188,7 +189,7 @@ class RunOptions:
     @device.setter
     def device(self, value):
         if value is None:
-            value = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            value = 0 if torch.cuda.is_available() else "cpu"
         self._device = value
 
     def post_init(self):
@@ -205,16 +206,16 @@ class RunOptions:
                 raise Exception(f"there is no default batch for input size {self.input_size}")
 
         tqdm.pandas()
-        warnings.filterwarnings("ignore")
+        # warnings.filterwarnings("ignore")
 
         seed = 1234
         seed_everything(seed)
 
         # check device available
-        _tmp_tensor = torch.rand(1).to(self.device)
-        del _tmp_tensor
+        # _tmp_tensor = torch.rand(1).to(self.device)
+        # del _tmp_tensor
 
-        torch.cuda.set_device(self.device)
+        # torch.cuda.set_device(self.device)
 
         if self.is_track_mlflow():
             if not self.mlflow_experiment:
@@ -230,10 +231,10 @@ class RunOptions:
             mlflow.log_params(self.__dict__)
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
 
-        try:
-            set_start_method('spawn')
-        except RuntimeError:
-            pass
+        # try:
+        #     set_start_method('spawn')
+        # except RuntimeError:
+        #     pass
 
 
 

@@ -7,11 +7,13 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-import random
+import pytorch_lightning as pl
 
 import click
 import configobj
 import cv2
+from pytorch_lightning.loggers import TensorBoardLogger
+
 try:
     import mlflow
 except:
@@ -26,7 +28,7 @@ from colorama import Fore, Style
 from efficientnet_pytorch import EfficientNet
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import KFold
-from torch.multiprocessing import set_start_method
+from pytorch_lightning.metrics.classification import AUROC
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
 from torch.utils.data import Dataset, DataLoader
@@ -99,12 +101,12 @@ def get_train_transforms(config):
         ], p=1.0)
 
 
-def signal_handler(_sig, _frame):
-    print('You pressed Ctrl+C!')
-    sys.exit(0)
-
-
-signal.signal(signal.SIGINT, signal_handler)
+# def signal_handler(_sig, _frame):
+#     print('You pressed Ctrl+C!')
+#     sys.exit(0)
+#
+#
+# signal.signal(signal.SIGINT, signal_handler)
 
 
 # from huggingface transformers
@@ -186,70 +188,6 @@ class MelanomaDataset(Dataset):
         return len(self.df)
 
 
-class EfficientNetwork(nn.Module):
-    def __init__(self, output_size, no_columns, model_name='efficientnet-b0'):
-        super().__init__()
-        self.no_columns = no_columns
-
-        self.features = EfficientNet.from_pretrained(model_name)
-
-        # (CSV) or Meta Features
-        meta_features_out = 250
-        self.csv = nn.Sequential(nn.Linear(self.no_columns, 250),
-                                 nn.BatchNorm1d(250),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3),
-
-                                 nn.Linear(250, 250),
-                                 nn.BatchNorm1d(250),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3),
-
-                                 nn.Linear(250, meta_features_out),
-                                 nn.BatchNorm1d(meta_features_out),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3))
-
-        self.eff_net_out_features = getattr(self.features, '_fc').in_features
-
-        fc_hidden_size = 250
-        self.classification = nn.Sequential(nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
-                                            nn.Linear(fc_hidden_size, output_size))
-
-    def forward(self, image, csv_data, prints=False):
-
-        if prints:
-            print('Input Image shape:', image.shape, '\n' +
-                  'Input csv_data shape:', csv_data.shape)
-
-        # IMAGE CNN
-        image = self.features.extract_features(image)
-
-        if prints:
-            print('Features Image shape:', image.shape)
-
-        # image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
-        features = F.adaptive_avg_pool2d(image, 1)
-        image = features.view(features.size(0), -1)
-        if prints:
-            print('Image Reshaped shape:', image.shape)
-
-        # CSV FNN
-        csv_data = self.csv(csv_data)
-        if prints:
-            print('CSV Data:', csv_data.shape)
-
-        # Concatenate
-        image_csv_data = torch.cat((image, csv_data), dim=1)
-
-        # CLASSIF
-        out = self.classification(image_csv_data)
-        if prints:
-            print('Out shape:', out.shape)
-
-        return out
-
-
 def load_dataset(config: cli.RunOptions):
     train_df = pd.read_csv(config.dataset_2020() / 'train.csv')
     train_df_2019 = pd.read_csv(config.dataset_2019() / 'train.csv')
@@ -313,7 +251,15 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df, train_df_2018, val_df, train_transform, tta_transform, test_transform, meta_features, config: cli.RunOptions, fold_idx=0) -> TrainResult:
+def train_fit(train_df,
+              train_df_2018,
+              val_df,
+              train_transform,
+              tta_transform,
+              test_transform,
+              meta_features,
+              config: cli.RunOptions,
+              fold_idx=0) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -362,184 +308,23 @@ def train_fit(train_df, train_df_2018, val_df, train_transform, tta_transform, t
                                 num_workers=config.num_workers,
                                 pin_memory=True)
 
-    model = EfficientNetwork(output_size=output_size, no_columns=len(meta_features), model_name=config.model)
-    model = model.to(config.device)
+    os.makedirs(Path(config.output_path) / f'{config.model}', exist_ok=True)
+    tb_logger = TensorBoardLogger(save_dir=config.output_path, name=f'{config.model}', version=f'fold_{fold_idx}')
+    model = IsicModel(output_size=output_size,
+                      no_columns=len(meta_features),
+                      config=config,
+                      steps_per_epoch=int(len(train_dataset) / config.batch_size))
 
-    pos_weight = torch.tensor([10]).to(config.device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="sum")
-
-    if config.optim == cli.OPTIM_ADAM:
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    elif config.optim == cli.OPTIM_ADAMW:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    elif config.optim == cli.OPTIM_SGD:
-        optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate, momentum=0.9, nesterov=True)
-    else:
-        raise Exception(f"unknown optimizer f{config.optim}")
-
-    # scheduler = ReduceLROnPlateau(optimizer=optimizer,
-    #                               mode='max',
-    #                               patience=config.patience,
-    #                               verbose=True,
-    #                               factor=config.lr_factor)
-    steps_per_epoch = int(len(train_dataset) / config.batch_size)
-
-    if config.scheduler == cli.SCHED_1CYC:
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            max_lr=config.learning_rate,
-            epochs=config.epochs,
-            optimizer=optimizer,
-            steps_per_epoch=steps_per_epoch,
-            pct_start=0.1,
-            div_factor=10,
-            final_div_factor=100,
-            base_momentum=0.90,
-            max_momentum=0.95,
-        )
-    elif config.scheduler == cli.SCHED_COSINE:
-        scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
-                                                    num_warmup_steps=3 * steps_per_epoch,
-                                                    num_training_steps=config.epochs * steps_per_epoch)
-    elif config.scheduler == cli.SCHED_DEOTTE:
-        scheduler = get_exp_schedule_with_warmup(optimizer=optimizer,
-                                                 num_warmup_steps=5 * steps_per_epoch,
-                                                 steps_per_epoch=steps_per_epoch,
-                                                 num_sustain_steps=0)
-
-    else:
-        raise Exception(f"unknown scheduler {config.scheduler}")
-
-    if config.train:
-        for epoch in trange(config.epochs, desc='Epoch'):
-            start_time = time.time()
-            correct = 0
-            train_losses = 0
-            val_losses = 0
-
-            model.train()  # Set the model in train mode
-
-            for data, labels in tqdm(train_loader, desc='Batch', leave=False):
-                data[0] = torch.tensor(data[0], device=config.device, dtype=torch.float32)
-                data[1] = torch.tensor(data[1], device=config.device, dtype=torch.float32)
-                labels = torch.tensor(labels, device=config.device, dtype=torch.float32)
-
-                y_smooth = labels.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
-
-                # Clear gradients first; very important, usually done BEFORE prediction
-                optimizer.zero_grad()
-
-                # Log Probabilities & Backpropagation
-                out = model(data[0], data[1])
-                loss = criterion(out, y_smooth.unsqueeze(1))
-                loss.backward()
-                optimizer.step()
-
-                scheduler.step()
-
-                # --- Save information after this batch ---
-                # Save loss
-                # From log probabilities to actual probabilities
-                # 0 and 1
-                train_preds = torch.round(torch.sigmoid(out))
-                train_losses += loss.item()
-
-                # Number of correct predictions
-                correct += (train_preds.cpu() == labels.cpu().unsqueeze(1)).sum().item()
-
-            # Compute Train Accuracy
-            train_acc = correct / len(train_dataset)
-            model.eval()  # switch model to the evaluation mode
-            val_pred_arr = []
-            with torch.no_grad():  # Do not calculate gradient since we are only predicting
-
-                for j, (data_val, label_val) in enumerate(tqdm(val_loader, desc='Val: ', leave=False)):
-                    data_val[0] = torch.tensor(data_val[0], device=config.device, dtype=torch.float32)
-                    data_val[1] = torch.tensor(data_val[1], device=config.device, dtype=torch.float32)
-                    label_val = torch.tensor(label_val, device=config.device, dtype=torch.float32)
-
-                    y_smooth = label_val.float() * (1 - config.loss_bce_label_smoothing) + 0.5 * config.loss_bce_label_smoothing
-
-                    z_val = model(data_val[0], data_val[1])
-
-                    loss = criterion(z_val, y_smooth.unsqueeze(1))
-                    val_losses += loss.item()
-
-                    val_pred = torch.sigmoid(z_val)
-                    val_pred_arr.append(val_pred.cpu().numpy())
-                val_preds = np.concatenate(val_pred_arr)
-                val_acc = accuracy_score(val_df['target'].values, np.round(val_preds))
-                val_roc = roc_auc_score(val_df['target'].values, val_preds)
-
-                epochval = epoch + 1
-
-                train_loss = train_losses / len(train_dataset)
-                val_loss = val_losses / len(val)
-
-                print(Fore.YELLOW, 'Epoch: ', Style.RESET_ALL, epochval, '|',
-                      Fore.CYAN, 'Loss: ', Style.RESET_ALL, train_loss, '|',
-                      Fore.BLUE, ' Val loss: ', Style.RESET_ALL, val_loss, '|',
-                      Fore.RED, ' Val roc_auc:', Style.RESET_ALL, val_roc, '|',
-                      Fore.YELLOW, ' Training time:', Style.RESET_ALL,
-                      str(datetime.timedelta(seconds=time.time() - start_time)))
-
-                if config.is_track_mlflow():
-                    mlflow.active_run()
-                    mlflow.log_metric("train_loss", train_loss, step=epoch)
-                    mlflow.log_metric("val_loss", val_loss, step=epoch)
-                    mlflow.log_metric("train_acc", train_acc, step=epoch)
-                    mlflow.log_metric("val_acc", val_acc, step=epoch)
-                    mlflow.log_metric("val_roc_auc", val_roc, step=epoch)
-
-                # scheduler.step(val_roc)
-                # During the first iteratsion (first epoch) best validation is set to None
-                if not best_val:
-                    best_val = val_roc  # So any validation roc_auc we have is the best one for now
-                    torch.save(model, model_path)  # Saving the model
-                    continue
-
-                if val_roc >= best_val:
-                    best_val = val_roc
-                    patience = config.patience  # Resetting patience since we have new best validation accuracy
-                    torch.save(model, model_path)  # Saving current best model
-                else:
-                    patience -= 1
-                    if patience == 0:
-                        print(Fore.BLUE, 'Early stopping. Best Val roc_auc: {:.3f}'.format(best_val), Style.RESET_ALL)
-                        break
-
-    # val on best model
-    model = torch.load(model_path)  # Loading best model of this fold
-    model.eval()  # switch model to the evaluation mode
-    with torch.no_grad():
-        # Predicting on validation set once again to obtain data for OOF
-        fold_preds = torch.zeros((len(val_tta), 1), dtype=torch.float32, device=config.device)
-        fold_preds_tta = torch.zeros((len(val_tta), 1), dtype=torch.float32, device=config.device)
-        val_targets_arr = []
-
-        for i, (x_val, y_val) in enumerate(tqdm(val_loader, desc='Predict no TTA', leave=False)):
-            x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
-            x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
-            y_val = torch.tensor(y_val, device=config.device, dtype=torch.float32)
-            z_val = model(x_val[0], x_val[1])
-            val_pred = torch.sigmoid(z_val)
-
-            fold_preds[i * val_loader.batch_size:i * val_loader.batch_size + x_val[0].shape[0]] += val_pred
-            val_targets_arr.append(y_val.cpu().numpy())
-
-        for _ in trange(config.tta, desc='TTA', leave=False):
-            for i, (x_val, y_val) in enumerate(tqdm(val_tta_loader, desc='Predict TTA', leave=False)):
-                x_val[0] = torch.tensor(x_val[0], device=config.device, dtype=torch.float32)
-                x_val[1] = torch.tensor(x_val[1], device=config.device, dtype=torch.float32)
-
-                z_val = model(x_val[0], x_val[1])
-                val_pred = torch.sigmoid(z_val)
-
-                fold_preds_tta[i * val_tta_loader.batch_size:i * val_tta_loader.batch_size + x_val[0].shape[0]] += val_pred
-        fold_preds_tta /= config.tta
-
-        train_result.pred = fold_preds.cpu().numpy()[:, 0]
-        train_result.pred_tta = fold_preds_tta.cpu().numpy()[:, 0]
-        train_result.target = np.concatenate(val_targets_arr)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(model_path,
+                                                       save_top_k=1, monitor='val_auc', mode='max')
+    trainer = pl.Trainer(logger=tb_logger,
+                         gpus=config.device,
+                         precision=16 if config.device else 32,
+                         max_epochs=config.epochs,
+                         distributed_backend='ddp',
+                         # early_stop_callback=early_stop_callback,
+                         checkpoint_callback=checkpoint_callback)
+    trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
     train_result.best_val = best_val
 
@@ -729,6 +514,150 @@ def predict_model(test_df, meta_features, config: cli.RunOptions, train_transfor
     submission.to_csv('submission.csv', index=False)
 
     print(Fore.MAGENTA, 'saved to submission.csv', Style.RESET_ALL)
+
+
+class IsicModel(pl.LightningModule):
+
+    def __init__(self, output_size, no_columns, config: cli.RunOptions, steps_per_epoch):
+        super().__init__()
+
+        self.config = config
+
+        self.steps_per_epoch = steps_per_epoch
+
+        self.no_columns = no_columns
+
+        self.features = EfficientNet.from_pretrained(config.model)
+
+        # (CSV) or Meta Features
+        meta_features_out = 250
+        self.csv = nn.Sequential(nn.Linear(self.no_columns, 250),
+                                 nn.BatchNorm1d(250),
+                                 nn.ReLU(),
+                                 nn.Dropout(p=0.3),
+
+                                 nn.Linear(250, 250),
+                                 nn.BatchNorm1d(250),
+                                 nn.ReLU(),
+                                 nn.Dropout(p=0.3),
+
+                                 nn.Linear(250, meta_features_out),
+                                 nn.BatchNorm1d(meta_features_out),
+                                 nn.ReLU(),
+                                 nn.Dropout(p=0.3))
+
+        self.eff_net_out_features = getattr(self.features, '_fc').in_features
+
+        fc_hidden_size = 250
+        self.classification = nn.Sequential(nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
+                                            nn.Linear(fc_hidden_size, output_size))
+
+    def forward(self, image, csv_data):
+        # IMAGE CNN
+        image = self.features.extract_features(image)
+
+        # image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
+        features = F.adaptive_avg_pool2d(image, 1)
+        image = features.view(features.size(0), -1)
+
+        # CSV FNN
+        csv_data = self.csv(csv_data)
+
+        # Concatenate
+        image_csv_data = torch.cat((image, csv_data), dim=1)
+
+        # CLASSIF
+        out = self.classification(image_csv_data)
+
+        return out
+
+    def label_smoothing(self, y):
+        return y.float() * (1 - self.config.loss_bce_label_smoothing) + 0.5 * self.config.loss_bce_label_smoothing
+
+    def step(self, batch):
+        data, y = batch
+
+        y_hat = self(data[0], data[1]).flatten()
+        y_smooth = self.label_smoothing(y)
+        loss = F.binary_cross_entropy_with_logits(y_hat,
+                                                  y_smooth,
+                                                  pos_weight=torch.tensor(self.config.pos_weight))
+
+        return loss, y, y_hat.sigmoid()
+
+    def training_step(self, batch, batch_idx):
+        loss, y, y_hat = self.step(batch)
+        acc = (y_hat.round() == y).float().mean().item()
+        tensorboard_logs = {'train_loss': loss, 'acc': acc}
+
+        return {'loss': loss, 'acc': acc, 'log': tensorboard_logs}
+
+    def validation_step(self, batch, batch_nb):
+        loss, y, y_hat = self.step(batch)
+        return {"val_loss": loss,
+                "y": y.detach(),
+                "y_hat": y_hat.detach()}
+
+    def validation_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        y = torch.cat([x['y'] for x in outputs])
+        y_hat = torch.cat([x['y_hat'] for x in outputs])
+        auc = AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5  # skip sanity check
+        acc = (y_hat.round() == y).float().mean().item()
+        print(f"Epoch {self.current_epoch} acc:{acc} auc:{auc}")
+        tensorboard_logs = {'val_loss': avg_loss, 'val_auc': auc, 'val_acc': acc}
+        return {'avg_val_loss': avg_loss,
+                'val_auc': auc, 'val_acc': acc,
+                'log': tensorboard_logs}
+
+    def test_step(self, batch, batch_nb):
+        image, tabular, _ = batch
+        y_hat = self(image, tabular).flatten().sigmoid()
+        return {'y_hat': y_hat}
+
+    def configure_optimizers(self):
+        if self.config.optim == cli.OPTIM_ADAM:
+            optimizer = torch.optim.Adam(self.parameters(),
+                                         lr=self.config.learning_rate,
+                                         weight_decay=self.config.weight_decay)
+        elif self.config.optim == cli.OPTIM_ADAMW:
+            optimizer = torch.optim.AdamW(self.parameters(),
+                                          lr=self.config.learning_rate,
+                                          weight_decay=self.config.weight_decay)
+        elif self.config.optim == cli.OPTIM_SGD:
+            optimizer = torch.optim.SGD(self.parameters(),
+                                        lr=self.config.learning_rate,
+                                        momentum=0.9,
+                                        nesterov=True)
+        else:
+            raise Exception(f"unknown optimizer f{self.config.optim}")
+
+        if self.config.scheduler == cli.SCHED_1CYC:
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                max_lr=self.config.learning_rate,
+                epochs=self.config.epochs,
+                optimizer=optimizer,
+                steps_per_epoch=self.steps_per_epoch,
+                pct_start=0.1,
+                div_factor=10,
+                final_div_factor=100,
+                base_momentum=0.90,
+                max_momentum=0.95,
+            )
+        elif self.config.scheduler == cli.SCHED_COSINE:
+            scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
+                                                        num_warmup_steps=3 * self.steps_per_epoch,
+                                                        num_training_steps=self.config.epochs * self.steps_per_epoch)
+        elif self.config.scheduler == cli.SCHED_DEOTTE:
+            scheduler = get_exp_schedule_with_warmup(optimizer=optimizer,
+                                                     num_warmup_steps=5 * self.steps_per_epoch,
+                                                     steps_per_epoch=self.steps_per_epoch,
+                                                     num_sustain_steps=0)
+
+        else:
+            raise Exception(f"unknown scheduler {self.config.scheduler}")
+
+        return [optimizer], [scheduler]
 
 
 def train_cmd(config: cli.RunOptions):
