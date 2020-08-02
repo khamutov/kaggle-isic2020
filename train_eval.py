@@ -182,7 +182,7 @@ class MelanomaDataset(Dataset):
             #             image = image.cuda()
             return (image, metadata), y
         else:
-            return (image, metadata)
+            return (image, metadata), -1  # const for common contract
 
     def __len__(self):
         return len(self.df)
@@ -265,9 +265,6 @@ def train_fit(train_df,
     train_result = TrainResult()
     train_result.names = val_df["image_name"].to_numpy()
 
-    best_val = None
-    patience = config.patience  # Best validation score within this fold
-
     model_path = Path(config.output_path) / f"model{fold_idx}.pth"
 
     train_dataset_2020 = MelanomaDataset(df=train_df,
@@ -321,12 +318,28 @@ def train_fit(train_df,
                          gpus=config.device,
                          precision=16 if config.device else 32,
                          max_epochs=config.epochs,
-                         distributed_backend='ddp',
+                         # distributed_backend='ddp',
+                         benchmark=True,
                          # early_stop_callback=early_stop_callback,
                          checkpoint_callback=checkpoint_callback)
     trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
-    train_result.best_val = best_val
+    # build OOF metrics
+    trainer.test(test_dataloaders=val_loader, ckpt_path='best')
+    fold_preds = torch.load('preds.pt')
+    best_auc = roc_auc_score(val_df["target"].values, fold_preds.cpu().numpy()) if val_df["target"].mean() > 0 else 0.5  # skip sanity check
+    train_result.pred = fold_preds.cpu().numpy()
+    train_result.target = val_df["target"].values
+
+    fold_preds_tta = torch.zeros((len(val_tta))).type_as(fold_preds)
+    for _ in trange(config.tta, desc='val TTA', leave=False):
+        trainer.test(test_dataloaders=val_tta_loader, ckpt_path='best')
+
+        fold_preds_tta += torch.load('preds.pt')
+    fold_preds_tta /= config.tta
+    train_result.pred_tta = fold_preds_tta.cpu().numpy()
+
+    train_result.best_val = best_auc
 
     return train_result
 
@@ -387,8 +400,8 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
     oof_tta = np.concatenate(oof_pred_tta).squeeze()
     true = np.concatenate(oof_target)
     folds = np.concatenate(oof_folds)
-    auc = roc_auc_score(true, oof)
-    auc_tta = roc_auc_score(true, oof_tta)
+    auc = roc_auc_score(true, oof) if true.mean() > 0 else 0.5
+    auc_tta = roc_auc_score(true, oof_tta) if true.mean() > 0 else 0.5
     names = np.concatenate(oof_names)
 
     print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
@@ -611,9 +624,13 @@ class IsicModel(pl.LightningModule):
                 'log': tensorboard_logs}
 
     def test_step(self, batch, batch_nb):
-        image, tabular, _ = batch
-        y_hat = self(image, tabular).flatten().sigmoid()
+        data, _ = batch
+        y_hat = self(data[0], data[1]).flatten().sigmoid()
         return {'y_hat': y_hat}
+
+    def test_epoch_end(self, outputs):
+        y_hat = torch.cat([x['y_hat'] for x in outputs])
+        torch.save(y_hat, 'preds.pt')
 
     def configure_optimizers(self):
         if self.config.optim == cli.OPTIM_ADAM:
