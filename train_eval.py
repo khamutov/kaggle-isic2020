@@ -20,6 +20,7 @@ except:
     print("Run without mlflow")
 import numpy as np
 import pandas as pd
+
 # PyTorch
 import torch
 import torch.nn as nn
@@ -47,58 +48,78 @@ FOLDS = 5
 
 
 def get_tta_transforms(config):
-    return A.Compose([
+    return A.Compose(
+        [
             A.NoOp(),  # it's here because it calls random.random and change results
             A.JpegCompression(p=0.5),
             A.Rotate(limit=80, p=1.0),
-            A.OneOf([
-                A.NoOp(),
-                A.GridDistortion() if config.grid_distortion else A.NoOp(),
-                A.NoOp(),
-            ]),
+            A.OneOf(
+                [
+                    A.NoOp(),
+                    A.GridDistortion() if config.grid_distortion else A.NoOp(),
+                    A.NoOp(),
+                ]
+            ),
             # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
             #                   height=resolution, width=resolution, p=1.0),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
             A.NoOp(),
-            A.OneOf([
-                A.NoOp(),
-                A.HueSaturationValue(hue_shift_limit=0),
-            ]),
+            A.OneOf([A.NoOp(), A.HueSaturationValue(hue_shift_limit=0),]),
             A.NoOp(),
             A.Normalize(),
             ToTensorV2(),
-        ], p=1.0)
+        ],
+        p=1.0,
+    )
 
 
 def get_train_transforms(config):
-    return A.Compose([
-            AdvancedHairAugmentation(hairs_folder='/home/a.khamutov/kaggle-datasource/melanoma-hairs')
-            if config.advanced_hair_augmentation else A.NoOp(),
+    return A.Compose(
+        [
+            AdvancedHairAugmentation(
+                hairs_folder="/home/a.khamutov/kaggle-datasource/melanoma-hairs"
+            )
+            if config.advanced_hair_augmentation
+            else A.NoOp(),
             A.JpegCompression(p=0.5) if config.jpeg_compression else A.NoOp(),
             A.Rotate(limit=80, p=1.0) if config.rotate else A.NoOp(),
-            A.OneOf([
-                A.OpticalDistortion() if config.optical_distortion else A.NoOp(),
-                A.GridDistortion() if config.grid_distortion else A.NoOp(),
-                A.IAAPiecewiseAffine() if config.piecewise_affine else A.NoOp(),
-            ]),
+            A.OneOf(
+                [
+                    A.OpticalDistortion() if config.optical_distortion else A.NoOp(),
+                    A.GridDistortion() if config.grid_distortion else A.NoOp(),
+                    A.IAAPiecewiseAffine() if config.piecewise_affine else A.NoOp(),
+                ]
+            ),
             # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
             #                   height=resolution, width=resolution, p=1.0),
             A.HorizontalFlip(p=0.5) if config.horizontal_flip else A.NoOp(),
             A.VerticalFlip(p=0.5) if config.vertical_flip else A.NoOp(),
             A.GaussianBlur(p=0.3) if not config.gaussian_blur else A.NoOp(),
-            A.OneOf([
-                A.RandomBrightnessContrast() if not config.random_brightness_contrast else A.NoOp(),
-                A.HueSaturationValue(hue_shift_limit=0) if not config.hue_saturation_value else A.NoOp(),
-            ]),
-            A.Cutout(num_holes=8,
-                     max_h_size=config.input_size//5,
-                     max_w_size=config.input_size//5,
-                     fill_value=0,
-                     p=0.75) if config.cutout else A.NoOp(),
+            A.OneOf(
+                [
+                    A.RandomBrightnessContrast()
+                    if not config.random_brightness_contrast
+                    else A.NoOp(),
+                    A.HueSaturationValue(hue_shift_limit=0)
+                    if not config.hue_saturation_value
+                    else A.NoOp(),
+                ]
+            ),
+            A.Cutout(
+                num_holes=8,
+                max_h_size=config.input_size // 5,
+                max_w_size=config.input_size // 5,
+                fill_value=0,
+                p=0.75,
+            )
+            if config.cutout
+            else A.NoOp(),
             A.Normalize(),
             ToTensorV2(),
-        ], p=1.0)
+        ],
+        p=1.0,
+    )
 
 
 # def signal_handler(_sig, _frame):
@@ -111,7 +132,11 @@ def get_train_transforms(config):
 
 # from huggingface transformers
 def get_cosine_schedule_with_warmup(
-    optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, num_cycles: float = 0.5, last_epoch: int = -1
+    optimizer: Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    num_cycles: float = 0.5,
+    last_epoch: int = -1,
 ):
     """
     Create a schedule with a learning rate that decreases following the values of the cosine function between the
@@ -138,28 +163,47 @@ def get_cosine_schedule_with_warmup(
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
-        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
-        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
+        progress = float(current_step - num_warmup_steps) / float(
+            max(1, num_training_steps - num_warmup_steps)
+        )
+        return max(
+            0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))
+        )
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
 # This is a common train schedule for transfer learning.
 # The learning rate starts near zero, then increases to a maximum, then decays over time.
-def get_exp_schedule_with_warmup(optimizer: Optimizer, num_warmup_steps: int, steps_per_epoch: int, num_sustain_steps: int = 0, lr_decay: float = 0.8):
+def get_exp_schedule_with_warmup(
+    optimizer: Optimizer,
+    num_warmup_steps: int,
+    steps_per_epoch: int,
+    num_sustain_steps: int = 0,
+    lr_decay: float = 0.8,
+):
     def lrfn(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
         elif current_step < num_warmup_steps + num_sustain_steps:
             return 1.0
 
-        return lr_decay ** (float(current_step - num_warmup_steps - num_sustain_steps) / steps_per_epoch)
+        return lr_decay ** (
+            float(current_step - num_warmup_steps - num_sustain_steps) / steps_per_epoch
+        )
 
     return LambdaLR(optimizer, lrfn)
 
 
 class MelanomaDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, imfolder: str, is_train: bool = True, transforms=None, meta_features=None):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        imfolder: str,
+        is_train: bool = True,
+        transforms=None,
+        meta_features=None,
+    ):
 
         self.df = df
         self.imfolder = imfolder
@@ -168,17 +212,21 @@ class MelanomaDataset(Dataset):
         self.meta_features = meta_features
 
     def __getitem__(self, index):
-        im_path = os.path.join(self.imfolder, self.df.iloc[index]['image_name'] + '.jpg')
+        im_path = os.path.join(
+            self.imfolder, self.df.iloc[index]["image_name"] + ".jpg"
+        )
         image = cv2.imread(im_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        metadata = np.array(self.df.iloc[index][self.meta_features].values, dtype=np.float32)
+        metadata = np.array(
+            self.df.iloc[index][self.meta_features].values, dtype=np.float32
+        )
 
         if self.transforms:
             sample = self.transforms(image=image)
-            image = sample['image']
+            image = sample["image"]
 
         if self.is_train:
-            y = self.df.iloc[index]['target']
+            y = self.df.iloc[index]["target"]
             #             image = image.cuda()
             return (image, metadata), y
         else:
@@ -189,48 +237,72 @@ class MelanomaDataset(Dataset):
 
 
 def load_dataset(config: cli.RunOptions):
-    train_df = pd.read_csv(config.dataset_2020() / 'train.csv')
-    train_df_2019 = pd.read_csv(config.dataset_2019() / 'train.csv')
+    train_df = pd.read_csv(config.dataset_2020() / "train.csv")
+    train_df_2019 = pd.read_csv(config.dataset_2019() / "train.csv")
 
-    train_df['fold'] = train_df['tfrecord']
-    train_df_2019['fold'] = train_df_2019['tfrecord']
-    test_df = pd.read_csv(config.dataset_official / 'test.csv')
+    train_df["fold"] = train_df["tfrecord"]
+    train_df_2019["fold"] = train_df_2019["tfrecord"]
+    test_df = pd.read_csv(config.dataset_official / "test.csv")
 
-    train_df['sex'] = train_df['sex'].map({'male': 1, 'female': 0})
-    train_df_2019['sex'] = train_df_2019['sex'].map({'male': 1, 'female': 0})
+    train_df["sex"] = train_df["sex"].map({"male": 1, "female": 0})
+    train_df_2019["sex"] = train_df_2019["sex"].map({"male": 1, "female": 0})
 
-    test_df['sex'] = test_df['sex'].map({'male': 1, 'female': 0})
+    test_df["sex"] = test_df["sex"].map({"male": 1, "female": 0})
 
-    train_df['sex'] = train_df['sex'].fillna(-1)
-    train_df_2019['sex'] = train_df_2019['sex'].fillna(-1)
+    train_df["sex"] = train_df["sex"].fillna(-1)
+    train_df_2019["sex"] = train_df_2019["sex"].fillna(-1)
 
-    test_df['sex'] = test_df['sex'].fillna(-1)
+    test_df["sex"] = test_df["sex"].fillna(-1)
 
     # imputing
-    imp_mean = (train_df["age_approx"].sum()) / (train_df["age_approx"].count() - train_df["age_approx"].isna().sum())
-    train_df['age_approx'] = train_df['age_approx'].fillna(imp_mean)
-    train_df_2019['age_approx'] = train_df_2019['age_approx'].fillna(imp_mean)
+    imp_mean = (train_df["age_approx"].sum()) / (
+        train_df["age_approx"].count() - train_df["age_approx"].isna().sum()
+    )
+    train_df["age_approx"] = train_df["age_approx"].fillna(imp_mean)
+    train_df_2019["age_approx"] = train_df_2019["age_approx"].fillna(imp_mean)
 
     imp_mean_test = (test_df["age_approx"].sum()) / (test_df["age_approx"].count())
-    test_df['age_approx'] = test_df['age_approx'].fillna(imp_mean_test)
+    test_df["age_approx"] = test_df["age_approx"].fillna(imp_mean_test)
 
-    train_df['patient_id'] = train_df['patient_id'].fillna(0)
-    train_df_2019['patient_id'] = train_df_2019['patient_id'].fillna(0)
+    train_df["patient_id"] = train_df["patient_id"].fillna(0)
+    train_df_2019["patient_id"] = train_df_2019["patient_id"].fillna(0)
 
     # OHE
     # TODO: make on sklearn
 
-    concat = pd.concat([train_df['anatom_site_general_challenge'],
-                        train_df_2019['anatom_site_general_challenge'],
-                        test_df['anatom_site_general_challenge']],
-                       ignore_index=True)
-    dummies = pd.get_dummies(concat, dummy_na=True, dtype=np.uint8, prefix='site')
-    train_df = pd.concat([train_df, dummies.iloc[:train_df.shape[0]]], axis=1)
-    train_df_2019 = pd.concat([train_df_2019, dummies.iloc[train_df.shape[0]:train_df.shape[0]+train_df_2019.shape[0]].reset_index(drop=True)], axis=1)
-    test_df = pd.concat([test_df, dummies.iloc[train_df.shape[0]+train_df_2019.shape[0]:].reset_index(drop=True)], axis=1)
+    concat = pd.concat(
+        [
+            train_df["anatom_site_general_challenge"],
+            train_df_2019["anatom_site_general_challenge"],
+            test_df["anatom_site_general_challenge"],
+        ],
+        ignore_index=True,
+    )
+    dummies = pd.get_dummies(concat, dummy_na=True, dtype=np.uint8, prefix="site")
+    train_df = pd.concat([train_df, dummies.iloc[: train_df.shape[0]]], axis=1)
+    train_df_2019 = pd.concat(
+        [
+            train_df_2019,
+            dummies.iloc[
+                train_df.shape[0] : train_df.shape[0] + train_df_2019.shape[0]
+            ].reset_index(drop=True),
+        ],
+        axis=1,
+    )
+    test_df = pd.concat(
+        [
+            test_df,
+            dummies.iloc[train_df.shape[0] + train_df_2019.shape[0] :].reset_index(
+                drop=True
+            ),
+        ],
+        axis=1,
+    )
 
-    meta_features = ['sex', 'age_approx'] + [col for col in train_df.columns if 'site_' in col]
-    meta_features.remove('anatom_site_general_challenge')
+    meta_features = ["sex", "age_approx"] + [
+        col for col in train_df.columns if "site_" in col
+    ]
+    meta_features.remove("anatom_site_general_challenge")
 
     test_df = test_df.drop(["anatom_site_general_challenge"], axis=1)
     train_df = train_df.drop(["anatom_site_general_challenge"], axis=1)
@@ -251,15 +323,17 @@ class TrainResult:
         pass
 
 
-def train_fit(train_df,
-              train_df_2018,
-              val_df,
-              train_transform,
-              tta_transform,
-              test_transform,
-              meta_features,
-              config: cli.RunOptions,
-              fold_idx=0) -> TrainResult:
+def train_fit(
+    train_df,
+    train_df_2018,
+    val_df,
+    train_transform,
+    tta_transform,
+    test_transform,
+    meta_features,
+    config: cli.RunOptions,
+    fold_idx=0,
+) -> TrainResult:
     output_size = 1  # statics
 
     train_result = TrainResult()
@@ -267,76 +341,103 @@ def train_fit(train_df,
 
     model_path = Path(config.output_path) / f"model{fold_idx}.pth"
 
-    train_dataset_2020 = MelanomaDataset(df=train_df,
-                                         imfolder=config.dataset_2020() / 'train',
-                                         is_train=True,
-                                         transforms=train_transform,
-                                         meta_features=meta_features)
-    train_dataset_2018 = MelanomaDataset(df=train_df_2018,
-                                         imfolder=config.dataset_2019() / 'train',
-                                         is_train=True,
-                                         transforms=train_transform,
-                                         meta_features=meta_features)
-    train_dataset = torch.utils.data.ConcatDataset([train_dataset_2020, train_dataset_2018])
-    val = MelanomaDataset(df=val_df,
-                          imfolder=config.dataset_2020() / 'train',
-                          is_train=True,
-                          transforms=test_transform,
-                          meta_features=meta_features)
-    val_tta = MelanomaDataset(df=val_df,
-                              imfolder=config.dataset_2020() / 'train',
-                              is_train=True,
-                              transforms=tta_transform,
-                              meta_features=meta_features)
-    train_loader = DataLoader(dataset=train_dataset,
-                              batch_size=config.batch_size,
-                              shuffle=True,
-                              num_workers=config.num_workers,
-                              pin_memory=True,
-                              drop_last=True)
-    val_loader = DataLoader(dataset=val,
-                            batch_size=config.batch_size * 2,
-                            shuffle=False,
-                            num_workers=config.num_workers,
-                            pin_memory=True)
-    val_tta_loader = DataLoader(dataset=val_tta,
-                                batch_size=config.batch_size * 2,
-                                shuffle=False,
-                                num_workers=config.num_workers,
-                                pin_memory=True)
+    train_dataset_2020 = MelanomaDataset(
+        df=train_df,
+        imfolder=config.dataset_2020() / "train",
+        is_train=True,
+        transforms=train_transform,
+        meta_features=meta_features,
+    )
+    train_dataset_2018 = MelanomaDataset(
+        df=train_df_2018,
+        imfolder=config.dataset_2019() / "train",
+        is_train=True,
+        transforms=train_transform,
+        meta_features=meta_features,
+    )
+    train_dataset = torch.utils.data.ConcatDataset(
+        [train_dataset_2020, train_dataset_2018]
+    )
+    val = MelanomaDataset(
+        df=val_df,
+        imfolder=config.dataset_2020() / "train",
+        is_train=True,
+        transforms=test_transform,
+        meta_features=meta_features,
+    )
+    val_tta = MelanomaDataset(
+        df=val_df,
+        imfolder=config.dataset_2020() / "train",
+        is_train=True,
+        transforms=tta_transform,
+        meta_features=meta_features,
+    )
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        dataset=val,
+        batch_size=config.batch_size * 2,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=True,
+    )
+    val_tta_loader = DataLoader(
+        dataset=val_tta,
+        batch_size=config.batch_size * 2,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=True,
+    )
 
-    os.makedirs(Path(config.output_path) / f'{config.model}', exist_ok=True)
-    tb_logger = TensorBoardLogger(save_dir=config.output_path, name=f'{config.model}', version=f'fold_{fold_idx}')
-    model = IsicModel(output_size=output_size,
-                      no_columns=len(meta_features),
-                      config=config,
-                      steps_per_epoch=int(len(train_dataset) / config.batch_size))
+    os.makedirs(Path(config.output_path) / f"{config.model}", exist_ok=True)
+    tb_logger = TensorBoardLogger(
+        save_dir=config.output_path, name=f"{config.model}", version=f"fold_{fold_idx}"
+    )
+    model = IsicModel(
+        output_size=output_size,
+        no_columns=len(meta_features),
+        config=config,
+        steps_per_epoch=int(len(train_dataset) / config.batch_size),
+    )
 
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(model_path,
-                                                       save_top_k=1, monitor='val_auc', mode='max')
-    trainer = pl.Trainer(logger=tb_logger,
-                         tpu_cores=8 if 'TPU_NAME' in os.environ.keys() else 0,
-                         gpus=config.device,
-                         precision=16 if config.device else 32,
-                         max_epochs=config.epochs,
-                         # distributed_backend='ddp',
-                         benchmark=True,
-                         # early_stop_callback=early_stop_callback,
-                         checkpoint_callback=checkpoint_callback)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        model_path, save_top_k=1, monitor="val_auc", mode="max"
+    )
+    trainer = pl.Trainer(
+        logger=tb_logger,
+        tpu_cores=8 if "TPU_NAME" in os.environ.keys() else 0,
+        gpus=config.device,
+        precision=16 if config.device else 32,
+        max_epochs=config.epochs,
+        # distributed_backend='ddp',
+        benchmark=True,
+        # early_stop_callback=early_stop_callback,
+        checkpoint_callback=checkpoint_callback,
+    )
     trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
     # build OOF metrics
-    trainer.test(test_dataloaders=val_loader, ckpt_path='best')
-    fold_preds = torch.load('preds.pt')
-    best_auc = roc_auc_score(val_df["target"].values, fold_preds.cpu().numpy()) if val_df["target"].mean() > 0 else 0.5  # skip sanity check
+    trainer.test(test_dataloaders=val_loader, ckpt_path="best")
+    fold_preds = torch.load("preds.pt")
+    best_auc = (
+        roc_auc_score(val_df["target"].values, fold_preds.cpu().numpy())
+        if val_df["target"].mean() > 0
+        else 0.5
+    )  # skip sanity check
     train_result.pred = fold_preds.cpu().numpy()
     train_result.target = val_df["target"].values
 
     fold_preds_tta = torch.zeros((len(val_tta))).type_as(fold_preds)
-    for _ in trange(config.tta, desc='val TTA', leave=False):
-        trainer.test(test_dataloaders=val_tta_loader, ckpt_path='best')
+    for _ in trange(config.tta, desc="val TTA", leave=False):
+        trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
 
-        fold_preds_tta += torch.load('preds.pt')
+        fold_preds_tta += torch.load("preds.pt")
     fold_preds_tta /= config.tta
     train_result.pred_tta = fold_preds_tta.cpu().numpy()
 
@@ -345,7 +446,15 @@ def train_fit(train_df,
     return train_result
 
 
-def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOptions, train_transform, tta_transform, test_transform):
+def train_model_no_cv(
+    train_df,
+    train_df_2018,
+    meta_features,
+    config: cli.RunOptions,
+    train_transform,
+    tta_transform,
+    test_transform,
+):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -359,9 +468,9 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
     idxV = np.arange(12, 15)
     fold_idx = 1
 
-    train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
-    train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT*2)].index
-    val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
+    train_idx = train_df.loc[train_df["fold"].isin(idxT)].index
+    train_idx_2018 = train_df_2018.loc[train_df_2018["fold"].isin(idxT * 2)].index
+    val_idx = train_df.loc[train_df["fold"].isin(idxV)].index
 
     oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
 
@@ -369,28 +478,39 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
         mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
         mlflow.log_param("fold", fold_idx)
 
-    print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'No CV mode', fold_idx, Style.RESET_ALL, Fore.CYAN,
-          '-' * 20,
-          Style.RESET_ALL)
+    print(
+        Fore.CYAN,
+        "-" * 20,
+        Style.RESET_ALL,
+        Fore.MAGENTA,
+        "No CV mode",
+        fold_idx,
+        Style.RESET_ALL,
+        Fore.CYAN,
+        "-" * 20,
+        Style.RESET_ALL,
+    )
 
     train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
     train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
     val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-    train_result = train_fit(train_df=train_fit_df,
-                             train_df_2018=train_fit_df_2018,
-                             val_df=val_fit_df,
-                             train_transform=train_transform,
-                             tta_transform=tta_transform,
-                             test_transform=test_transform,
-                             meta_features=meta_features,
-                             config=config,
-                             fold_idx=fold_idx)
+    train_result = train_fit(
+        train_df=train_fit_df,
+        train_df_2018=train_fit_df_2018,
+        val_df=val_fit_df,
+        train_transform=train_transform,
+        tta_transform=tta_transform,
+        test_transform=test_transform,
+        meta_features=meta_features,
+        config=config,
+        fold_idx=fold_idx,
+    )
 
     oof_pred.append(train_result.pred)
     oof_pred_tta.append(train_result.pred_tta)
     oof_target.append(train_result.target)
-    oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
+    oof_folds.append(np.ones_like(oof_target[-1], dtype="int8") * fold_idx)
 
     if config.is_track_mlflow():
         if train_result.best_val:
@@ -405,10 +525,10 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
     auc_tta = roc_auc_score(true, oof_tta) if true.mean() > 0 else 0.5
     names = np.concatenate(oof_names)
 
-    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
-    print(Fore.MAGENTA, 'OOF ROC AUC    ', auc, Style.RESET_ALL)
-    print(Fore.MAGENTA, 'OOF ROC AUC TTA', auc_tta, Style.RESET_ALL)
-    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
+    print(Fore.MAGENTA, "OOF ROC AUC    ", auc, Style.RESET_ALL)
+    print(Fore.MAGENTA, "OOF ROC AUC TTA", auc_tta, Style.RESET_ALL)
+    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
 
     if config.is_track_mlflow():
         mlflow.log_metric("oof_roc_auc", auc)
@@ -416,10 +536,18 @@ def train_model_no_cv(train_df, train_df_2018, meta_features, config: cli.RunOpt
 
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
-    df_oof.to_csv('oof.csv', index=False)
+    df_oof.to_csv("oof.csv", index=False)
 
 
-def train_model_cv(train_df, train_df_2018, meta_features, config, train_transform, tta_transform, test_transform):
+def train_model_cv(
+    train_df,
+    train_df_2018,
+    meta_features,
+    config,
+    train_transform,
+    tta_transform,
+    test_transform,
+):
     train_len = len(train_df)
     oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
@@ -431,9 +559,9 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
 
     skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
     for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
-        train_idx = train_df.loc[train_df['fold'].isin(idxT)].index
-        train_idx_2018 = train_df_2018.loc[train_df_2018['fold'].isin(idxT * 2)].index
-        val_idx = train_df.loc[train_df['fold'].isin(idxV)].index
+        train_idx = train_df.loc[train_df["fold"].isin(idxT)].index
+        train_idx_2018 = train_df_2018.loc[train_df_2018["fold"].isin(idxT * 2)].index
+        val_idx = train_df.loc[train_df["fold"].isin(idxV)].index
 
         oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
 
@@ -441,28 +569,39 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
             mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
             mlflow.log_param("fold", fold_idx)
 
-        print(Fore.CYAN, '-' * 20, Style.RESET_ALL, Fore.MAGENTA, 'Fold', fold_idx, Style.RESET_ALL, Fore.CYAN,
-              '-' * 20,
-              Style.RESET_ALL)
+        print(
+            Fore.CYAN,
+            "-" * 20,
+            Style.RESET_ALL,
+            Fore.MAGENTA,
+            "Fold",
+            fold_idx,
+            Style.RESET_ALL,
+            Fore.CYAN,
+            "-" * 20,
+            Style.RESET_ALL,
+        )
 
         train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
         train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
         val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
-        train_result = train_fit(train_df=train_fit_df,
-                                 train_df_2018=train_fit_df_2018,
-                                 val_df=val_fit_df,
-                                 train_transform=train_transform,
-                                 tta_transform=tta_transform,
-                                 test_transform=test_transform,
-                                 meta_features=meta_features,
-                                 config=config,
-                                 fold_idx=fold_idx)
+        train_result = train_fit(
+            train_df=train_fit_df,
+            train_df_2018=train_fit_df_2018,
+            val_df=val_fit_df,
+            train_transform=train_transform,
+            tta_transform=tta_transform,
+            test_transform=test_transform,
+            meta_features=meta_features,
+            config=config,
+            fold_idx=fold_idx,
+        )
 
         oof_pred.append(train_result.pred)
         oof_pred_tta.append(train_result.pred_tta)
         oof_target.append(train_result.target)
-        oof_folds.append(np.ones_like(oof_target[-1], dtype='int8') * fold_idx)
+        oof_folds.append(np.ones_like(oof_target[-1], dtype="int8") * fold_idx)
 
         if config.is_track_mlflow():
             if train_result.best_val:
@@ -477,62 +616,90 @@ def train_model_cv(train_df, train_df_2018, meta_features, config, train_transfo
     auc_tta = roc_auc_score(true, oof_tta)
     names = np.concatenate(oof_names)
 
-    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
-    print(Fore.MAGENTA, 'OOF ROC AUC', auc, Style.RESET_ALL)
-    print(Fore.MAGENTA, 'OOF ROC AUC TTA', auc_tta, Style.RESET_ALL)
-    print(Fore.CYAN, '-' * 60, Style.RESET_ALL)
+    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
+    print(Fore.MAGENTA, "OOF ROC AUC", auc, Style.RESET_ALL)
+    print(Fore.MAGENTA, "OOF ROC AUC TTA", auc_tta, Style.RESET_ALL)
+    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
 
     if config.is_track_mlflow():
         mlflow.log_metric("oof_roc_auc", auc)
 
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
-    df_oof.to_csv('oof.csv', index=False)
+    df_oof.to_csv("oof.csv", index=False)
 
 
-def predict_model(test_df, meta_features, config: cli.RunOptions, train_transform, tta_transform, test_transform):
-    print(Fore.MAGENTA, 'Run prediction', Style.RESET_ALL)
+def predict_model(
+    test_df,
+    meta_features,
+    config: cli.RunOptions,
+    train_transform,
+    tta_transform,
+    test_transform,
+):
+    print(Fore.MAGENTA, "Run prediction", Style.RESET_ALL)
 
-    test = MelanomaDataset(df=test_df,
-                           imfolder=config.dataset_2020() / 'test',
-                           is_train=False,
-                           transforms=tta_transform,
-                           meta_features=meta_features)
-    test_loader = DataLoader(dataset=test,
-                             batch_size=config.batch_size * 2,
-                             shuffle=False,
-                             num_workers=config.num_workers,
-                             pin_memory=True)
+    test = MelanomaDataset(
+        df=test_df,
+        imfolder=config.dataset_2020() / "test",
+        is_train=False,
+        transforms=tta_transform,
+        meta_features=meta_features,
+    )
+    test_loader = DataLoader(
+        dataset=test,
+        batch_size=config.batch_size * 2,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=True,
+    )
 
     preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
     for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
         model = torch.load(Path(config.output_path) / f"model{fold_idx}.pth")
         model.eval()  # switch model to the evaluation mode
 
-        fold_preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
+        fold_preds = torch.zeros(
+            (len(test), 1), dtype=torch.float32, device=config.device
+        )
         with torch.no_grad():
-            for _ in trange(config.tta, desc='TTA', leave=False):
-                for i, x_test in enumerate(tqdm(test_loader, desc='Predict', leave=False)):
-                    x_test[0] = torch.tensor(x_test[0], device=config.device, dtype=torch.float32)
-                    x_test[1] = torch.tensor(x_test[1], device=config.device, dtype=torch.float32)
+            for _ in trange(config.tta, desc="TTA", leave=False):
+                for i, x_test in enumerate(
+                    tqdm(test_loader, desc="Predict", leave=False)
+                ):
+                    x_test[0] = torch.tensor(
+                        x_test[0], device=config.device, dtype=torch.float32
+                    )
+                    x_test[1] = torch.tensor(
+                        x_test[1], device=config.device, dtype=torch.float32
+                    )
                     z_test = model(x_test[0], x_test[1])
                     z_test = torch.sigmoid(z_test)
-                    fold_preds[i * test_loader.batch_size:i * test_loader.batch_size + x_test[0].shape[0]] += z_test
+                    fold_preds[
+                        i * test_loader.batch_size : i * test_loader.batch_size
+                        + x_test[0].shape[0]
+                    ] += z_test
             fold_preds /= config.tta
         preds += fold_preds
 
     preds /= FOLDS
 
-    submission = pd.DataFrame(dict(image_name=test_df['image_name'].to_numpy(), target=preds.cpu().numpy()[:, 0]))
-    submission = submission.sort_values('image_name')
-    submission.to_csv('submission.csv', index=False)
+    submission = pd.DataFrame(
+        dict(
+            image_name=test_df["image_name"].to_numpy(),
+            target=preds.cpu().numpy()[:, 0],
+        )
+    )
+    submission = submission.sort_values("image_name")
+    submission.to_csv("submission.csv", index=False)
 
-    print(Fore.MAGENTA, 'saved to submission.csv', Style.RESET_ALL)
+    print(Fore.MAGENTA, "saved to submission.csv", Style.RESET_ALL)
 
 
 class IsicModel(pl.LightningModule):
-
-    def __init__(self, output_size, no_columns, config: cli.RunOptions, steps_per_epoch):
+    def __init__(
+        self, output_size, no_columns, config: cli.RunOptions, steps_per_epoch
+    ):
         super().__init__()
 
         self.config = config
@@ -545,26 +712,28 @@ class IsicModel(pl.LightningModule):
 
         # (CSV) or Meta Features
         meta_features_out = 250
-        self.csv = nn.Sequential(nn.Linear(self.no_columns, 250),
-                                 nn.BatchNorm1d(250),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3),
+        self.csv = nn.Sequential(
+            nn.Linear(self.no_columns, 250),
+            nn.BatchNorm1d(250),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(250, 250),
+            nn.BatchNorm1d(250),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(250, meta_features_out),
+            nn.BatchNorm1d(meta_features_out),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+        )
 
-                                 nn.Linear(250, 250),
-                                 nn.BatchNorm1d(250),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3),
-
-                                 nn.Linear(250, meta_features_out),
-                                 nn.BatchNorm1d(meta_features_out),
-                                 nn.ReLU(),
-                                 nn.Dropout(p=0.3))
-
-        self.eff_net_out_features = getattr(self.features, '_fc').in_features
+        self.eff_net_out_features = getattr(self.features, "_fc").in_features
 
         fc_hidden_size = 250
-        self.classification = nn.Sequential(nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
-                                            nn.Linear(fc_hidden_size, output_size))
+        self.classification = nn.Sequential(
+            nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
+            nn.Linear(fc_hidden_size, output_size),
+        )
 
     def forward(self, image, csv_data):
         # IMAGE CNN
@@ -586,68 +755,80 @@ class IsicModel(pl.LightningModule):
         return out
 
     def label_smoothing(self, y):
-        return y.float() * (1 - self.config.loss_bce_label_smoothing) + 0.5 * self.config.loss_bce_label_smoothing
+        return (
+            y.float() * (1 - self.config.loss_bce_label_smoothing)
+            + 0.5 * self.config.loss_bce_label_smoothing
+        )
 
     def step(self, batch):
         data, y = batch
 
         y_hat = self(data[0], data[1]).flatten()
         y_smooth = self.label_smoothing(y)
-        loss = F.binary_cross_entropy_with_logits(y_hat,
-                                                  y_smooth,
-                                                  pos_weight=torch.tensor(self.config.pos_weight))
+        loss = F.binary_cross_entropy_with_logits(
+            y_hat, y_smooth, pos_weight=torch.tensor(self.config.pos_weight)
+        )
 
         return loss, y, y_hat.sigmoid()
 
     def training_step(self, batch, batch_idx):
         loss, y, y_hat = self.step(batch)
         acc = (y_hat.round() == y).float().mean().item()
-        tensorboard_logs = {'train_loss': loss, 'acc': acc}
+        tensorboard_logs = {"train_loss": loss, "acc": acc}
 
-        return {'loss': loss, 'acc': acc, 'log': tensorboard_logs}
+        return {"loss": loss, "acc": acc, "log": tensorboard_logs}
 
     def validation_step(self, batch, batch_nb):
         loss, y, y_hat = self.step(batch)
-        return {"val_loss": loss,
-                "y": y.detach(),
-                "y_hat": y_hat.detach()}
+        return {"val_loss": loss, "y": y.detach(), "y_hat": y_hat.detach()}
 
     def validation_epoch_end(self, outputs):
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        y = torch.cat([x['y'] for x in outputs])
-        y_hat = torch.cat([x['y_hat'] for x in outputs])
-        auc = AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5  # skip sanity check
+        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        y = torch.cat([x["y"] for x in outputs])
+        y_hat = torch.cat([x["y_hat"] for x in outputs])
+        auc = (
+            AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5
+        )  # skip sanity check
         acc = (y_hat.round() == y).float().mean().item()
         print(f"Epoch {self.current_epoch} val_loss:{avg_loss} auc:{auc}")
-        tensorboard_logs = {'val_loss': avg_loss, 'val_auc': auc, 'val_acc': acc}
-        return {'avg_val_loss': avg_loss,
-                'val_auc': auc, 'val_acc': acc,
-                'log': tensorboard_logs,
-                'progress_bar': {'val_loss': avg_loss}}
+        tensorboard_logs = {"val_loss": avg_loss, "val_auc": auc, "val_acc": acc}
+        return {
+            "avg_val_loss": avg_loss,
+            "val_auc": auc,
+            "val_acc": acc,
+            "log": tensorboard_logs,
+            "progress_bar": {"val_loss": avg_loss},
+        }
 
     def test_step(self, batch, batch_nb):
         data, _ = batch
         y_hat = self(data[0], data[1]).flatten().sigmoid()
-        return {'y_hat': y_hat}
+        return {"y_hat": y_hat}
 
     def test_epoch_end(self, outputs):
-        y_hat = torch.cat([x['y_hat'] for x in outputs])
-        torch.save(y_hat, 'preds.pt')
+        y_hat = torch.cat([x["y_hat"] for x in outputs])
+        torch.save(y_hat, "preds.pt")
 
     def configure_optimizers(self):
         if self.config.optim == cli.OPTIM_ADAM:
-            optimizer = torch.optim.Adam(self.parameters(),
-                                         lr=self.config.learning_rate,
-                                         weight_decay=self.config.weight_decay)
+            optimizer = torch.optim.Adam(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+            )
         elif self.config.optim == cli.OPTIM_ADAMW:
-            optimizer = torch.optim.AdamW(self.parameters(),
-                                          lr=self.config.learning_rate,
-                                          weight_decay=self.config.weight_decay)
+            optimizer = torch.optim.AdamW(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+            )
         elif self.config.optim == cli.OPTIM_SGD:
-            optimizer = torch.optim.SGD(self.parameters(),
-                                        lr=self.config.learning_rate,
-                                        momentum=0.9,
-                                        nesterov=True)
+            optimizer = torch.optim.SGD(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                momentum=0.9,
+                nesterov=True,
+            )
         else:
             raise Exception(f"unknown optimizer f{self.config.optim}")
 
@@ -664,14 +845,18 @@ class IsicModel(pl.LightningModule):
                 max_momentum=0.95,
             )
         elif self.config.scheduler == cli.SCHED_COSINE:
-            scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer,
-                                                        num_warmup_steps=3 * self.steps_per_epoch,
-                                                        num_training_steps=self.config.epochs * self.steps_per_epoch)
+            scheduler = get_cosine_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=3 * self.steps_per_epoch,
+                num_training_steps=self.config.epochs * self.steps_per_epoch,
+            )
         elif self.config.scheduler == cli.SCHED_DEOTTE:
-            scheduler = get_exp_schedule_with_warmup(optimizer=optimizer,
-                                                     num_warmup_steps=5 * self.steps_per_epoch,
-                                                     steps_per_epoch=self.steps_per_epoch,
-                                                     num_sustain_steps=0)
+            scheduler = get_exp_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=5 * self.steps_per_epoch,
+                steps_per_epoch=self.steps_per_epoch,
+                num_sustain_steps=0,
+            )
 
         else:
             raise Exception(f"unknown scheduler {self.config.scheduler}")
@@ -690,35 +875,35 @@ def train_cmd(config: cli.RunOptions):
     train_transform = get_train_transforms(config)
     tta_transform = get_tta_transforms(config)
 
-    test_transform = A.Compose([
-        A.Normalize(),
-        ToTensorV2(),
-    ], p=1.0)
+    test_transform = A.Compose([A.Normalize(), ToTensorV2(),], p=1.0)
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
-    train_fn(train_df=train_df,
-             train_df_2018=train_df_2019,
-             meta_features=meta_features,
-             config=config,
-             train_transform=train_transform,
-             tta_transform=tta_transform,
-             test_transform=test_transform)
+    train_fn(
+        train_df=train_df,
+        train_df_2018=train_df_2019,
+        meta_features=meta_features,
+        config=config,
+        train_transform=train_transform,
+        tta_transform=tta_transform,
+        test_transform=test_transform,
+    )
 
     if config.no_cv:
-        print(Fore.MAGENTA, 'Prediction on --no_cv disabled', Style.RESET_ALL)
+        print(Fore.MAGENTA, "Prediction on --no_cv disabled", Style.RESET_ALL)
     else:
-        predict_model(test_df=test_df,
-                      meta_features=meta_features,
-                      config=config,
-                      train_transform=train_transform,
-                      tta_transform=tta_transform,
-                      test_transform=test_transform)
+        predict_model(
+            test_df=test_df,
+            meta_features=meta_features,
+            config=config,
+            train_transform=train_transform,
+            tta_transform=tta_transform,
+            test_transform=test_transform,
+        )
 
 
 class CommanCLI(click.MultiCommand):
-
     def list_commands(self, ctx):
-        rv = ['train']
+        rv = ["train"]
         rv.sort()
         return rv
 
@@ -726,12 +911,14 @@ class CommanCLI(click.MultiCommand):
         config = configobj.ConfigObj("config", unrepr=True)
         params = list()
         for opt in cli.options:
-            click_opt = click.Option(("--" + opt.name,),
-                                     default=config.get(opt.name, opt.default),
-                                     help=opt.desc,
-                                     is_flag=opt.is_flag,
-                                     type=opt.type,
-                                     callback=opt.callback)
+            click_opt = click.Option(
+                ("--" + opt.name,),
+                default=config.get(opt.name, opt.default),
+                help=opt.desc,
+                is_flag=opt.is_flag,
+                type=opt.type,
+                callback=opt.callback,
+            )
             params.append(click_opt)
 
         @click.pass_context
@@ -753,5 +940,5 @@ def run(_ctx, *_args, **_kwargs):
     pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run()
