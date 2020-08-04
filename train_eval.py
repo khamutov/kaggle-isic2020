@@ -315,6 +315,7 @@ def train_fit(train_df,
     checkpoint_callback = pl.callbacks.ModelCheckpoint(model_path,
                                                        save_top_k=1, monitor='val_auc', mode='max')
     trainer = pl.Trainer(logger=tb_logger,
+                         tpu_cores=8 if 'TPU_NAME' in os.environ.keys() else 0,
                          gpus=config.device,
                          precision=16 if config.device else 32,
                          max_epochs=config.epochs,
@@ -617,11 +618,12 @@ class IsicModel(pl.LightningModule):
         y_hat = torch.cat([x['y_hat'] for x in outputs])
         auc = AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5  # skip sanity check
         acc = (y_hat.round() == y).float().mean().item()
-        print(f"Epoch {self.current_epoch} acc:{acc} auc:{auc}")
+        print(f"Epoch {self.current_epoch} val_loss:{avg_loss} auc:{auc}")
         tensorboard_logs = {'val_loss': avg_loss, 'val_auc': auc, 'val_acc': acc}
         return {'avg_val_loss': avg_loss,
                 'val_auc': auc, 'val_acc': acc,
-                'log': tensorboard_logs}
+                'log': tensorboard_logs,
+                'progress_bar': {'val_loss': avg_loss}}
 
     def test_step(self, batch, batch_nb):
         data, _ = batch
