@@ -436,7 +436,7 @@ def train_fit(
 
     # build OOF metrics
     trainer.test(test_dataloaders=val_loader, ckpt_path="best")
-    fold_preds = torch.load("preds.pt")
+    fold_preds = torch.load(f"preds_{trial.number}.pt")
     best_auc = (
         roc_auc_score(val_df["target"].values, fold_preds.cpu().numpy())
         if val_df["target"].mean() > 0
@@ -746,7 +746,7 @@ class IsicModel(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         y_hat = torch.cat([x["y_hat"] for x in outputs])
-        torch.save(y_hat, "preds.pt")
+        torch.save(y_hat, f"preds_{self.trial.number}.pt")
 
     def configure_optimizers(self):
         if self.config.optim == cli.OPTIM_ADAM:
