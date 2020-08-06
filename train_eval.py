@@ -18,6 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from colorama import Fore, Style
 from efficientnet_pytorch import EfficientNet
+from optuna.integration import PyTorchLightningPruningCallback
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.metrics.classification import AUROC
 from sklearn.metrics import roc_auc_score
@@ -330,7 +331,8 @@ def train_fit(
     test_transform,
     meta_features,
     config: cli.RunOptions,
-    fold_idx=0,
+    fold_idx: int,
+    trial: optuna.trial.Trial,
 ) -> TrainResult:
     output_size = 1  # statics
 
@@ -402,11 +404,22 @@ def train_fit(
         no_columns=len(meta_features),
         config=config,
         steps_per_epoch=int(len(train_dataset) / config.batch_size),
+        trial=trial,
     )
 
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        model_path, save_top_k=1, monitor="val_auc", mode="max"
-    )
+    if config.hpo:
+        # Filenames for each trial must be made unique in order to access each checkpoint.
+        checkpoint_callback = pl.callbacks.ModelCheckpoint(
+            Path(config.output_path) / ("trial_{}_".format(trial.number) + "{epoch}"),
+            monitor="val_acc",
+        )
+        early_stop_callback = PyTorchLightningPruningCallback(trial, monitor="val_acc")
+    else:
+        early_stop_callback = False
+        checkpoint_callback = pl.callbacks.ModelCheckpoint(
+            model_path, save_top_k=1, monitor="val_auc", mode="max"
+        )
+
     trainer = pl.Trainer(
         logger=tb_logger,
         tpu_cores=8 if "TPU_NAME" in os.environ.keys() else None,
@@ -415,7 +428,7 @@ def train_fit(
         max_epochs=config.epochs,
         # distributed_backend='ddp',
         benchmark=True,
-        # early_stop_callback=early_stop_callback,
+        early_stop_callback=early_stop_callback,
         checkpoint_callback=checkpoint_callback,
     )
     trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
@@ -431,13 +444,15 @@ def train_fit(
     train_result.pred = fold_preds.cpu().numpy()
     train_result.target = val_df["target"].values
 
-    fold_preds_tta = torch.zeros((len(val_tta))).type_as(fold_preds)
-    for _ in trange(config.tta, desc="val TTA", leave=False):
-        trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
+    # do not make tta on HPO
+    if not config.hpo:
+        fold_preds_tta = torch.zeros((len(val_tta))).type_as(fold_preds)
+        for _ in trange(config.tta, desc="val TTA", leave=False):
+            trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
 
-        fold_preds_tta += torch.load("preds.pt")
-    fold_preds_tta /= config.tta
-    train_result.pred_tta = fold_preds_tta.cpu().numpy()
+            fold_preds_tta += torch.load("preds.pt")
+        fold_preds_tta /= config.tta
+        train_result.pred_tta = fold_preds_tta.cpu().numpy()
 
     train_result.best_val = best_auc
 
@@ -452,6 +467,7 @@ def train_model_cv(
     train_transform,
     tta_transform,
     test_transform,
+    trial: optuna.trial.Trial,
 ):
     oof_pred = []
     oof_pred_tta = []
@@ -507,6 +523,7 @@ def train_model_cv(
             meta_features=meta_features,
             config=config,
             fold_idx=fold_idx,
+            trial=trial,
         )
 
         oof_pred.append(train_result.pred)
@@ -518,6 +535,9 @@ def train_model_cv(
             if train_result.best_val:
                 mlflow.log_metric("best_roc_auc", train_result.best_val)
             mlflow.end_run()
+
+        if config.hpo:
+            return train_result.best_val
 
     oof = np.concatenate(oof_pred).squeeze()
     oof_tta = np.concatenate(oof_pred_tta).squeeze()
@@ -615,11 +635,12 @@ class IsicModel(pl.LightningModule):
         no_columns,
         config: cli.RunOptions,
         steps_per_epoch,
-        trial: optuna.trial.Trial = None,
+        trial: optuna.trial.Trial,
     ):
         super().__init__()
 
         self.config = config
+        self.trial = trial
 
         self.steps_per_epoch = steps_per_epoch
 
@@ -730,7 +751,7 @@ class IsicModel(pl.LightningModule):
         if self.config.optim == cli.OPTIM_ADAM:
             optimizer = torch.optim.Adam(
                 self.parameters(),
-                lr=self.config.learning_rate,
+                lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
                 weight_decay=self.config.weight_decay,
             )
         elif self.config.optim == cli.OPTIM_ADAMW:
@@ -794,15 +815,42 @@ def train_cmd(config: cli.RunOptions):
 
     test_transform = A.Compose([A.Normalize(), ToTensorV2()], p=1.0)
 
-    train_model_cv(
-        train_df=train_df,
-        train_df_2018=train_df_2019,
-        meta_features=meta_features,
-        config=config,
-        train_transform=train_transform,
-        tta_transform=tta_transform,
-        test_transform=test_transform,
-    )
+    def train_fn(trial):
+        return train_model_cv(
+            train_df=train_df,
+            train_df_2018=train_df_2019,
+            meta_features=meta_features,
+            config=config,
+            train_transform=train_transform,
+            tta_transform=tta_transform,
+            test_transform=test_transform,
+            trial=trial,
+        )
+
+    if config.hpo:
+        pruner = optuna.pruners.MedianPruner()
+        study = optuna.create_study(
+            direction="maximize",
+            study_name="isic2020-study",
+            storage="sqlite:///hpo_study.db",
+            load_if_exists=True,
+            pruner=pruner,
+        )
+        study.optimize(train_fn, n_trials=config.hpo_n_trials)
+
+        print("Number of finished trials: {}".format(len(study.trials)))
+
+        print("Best trial:")
+        trial = study.best_trial
+
+        print("  Value: {}".format(trial.value))
+
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print("    {}: {}".format(key, value))
+    else:
+        fixed_trial = optuna.trial.FixedTrial({"param1": "value1"})
+        train_fn(fixed_trial)
 
     if config.no_cv:
         print(Fore.MAGENTA, "Prediction on --no_cv disabled", Style.RESET_ALL)
