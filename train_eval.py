@@ -1,25 +1,15 @@
-import datetime
 import math
 import os
-import signal
-import sys
-import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-import pytorch_lightning as pl
 
 import click
 import configobj
 import cv2
-from pytorch_lightning.loggers import TensorBoardLogger
-
-try:
-    import mlflow
-except:
-    print("Run without mlflow")
 import numpy as np
 import pandas as pd
+import pytorch_lightning as pl
 
 # PyTorch
 import torch
@@ -27,22 +17,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from colorama import Fore, Style
 from efficientnet_pytorch import EfficientNet
-from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import KFold
+from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.metrics.classification import AUROC
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import KFold
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
-from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm, trange
 
+import cli
 from augmentation.hairs import AdvancedHairAugmentation
+
+try:
+    import mlflow
+except ImportError:
+    print("Run without mlflow")
+
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     import albumentations as A
     from albumentations.pytorch.transforms import ToTensorV2
 
-import cli
 
 FOLDS = 5
 
@@ -65,7 +62,7 @@ def get_tta_transforms(config):
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
             A.NoOp(),
-            A.OneOf([A.NoOp(), A.HueSaturationValue(hue_shift_limit=0),]),
+            A.OneOf([A.NoOp(), A.HueSaturationValue(hue_shift_limit=0)]),
             A.NoOp(),
             A.Normalize(),
             ToTensorV2(),
@@ -411,7 +408,7 @@ def train_fit(
     )
     trainer = pl.Trainer(
         logger=tb_logger,
-        tpu_cores=8 if "TPU_NAME" in os.environ.keys() else 0,
+        tpu_cores=8 if "TPU_NAME" in os.environ.keys() else None,
         gpus=config.device,
         precision=16 if config.device else 32,
         max_epochs=config.epochs,
@@ -455,12 +452,9 @@ def train_model_no_cv(
     tta_transform,
     test_transform,
 ):
-    train_len = len(train_df)
-    oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
     oof_pred_tta = []
     oof_target = []
-    oof_val = []
     oof_folds = []
     oof_names = []
 
@@ -548,12 +542,9 @@ def train_model_cv(
     tta_transform,
     test_transform,
 ):
-    train_len = len(train_df)
-    oof = np.zeros(shape=(train_len, 1))
     oof_pred = []
     oof_pred_tta = []
     oof_target = []
-    oof_val = []
     oof_folds = []
     oof_names = []
 
@@ -787,7 +778,9 @@ class IsicModel(pl.LightningModule):
         y = torch.cat([x["y"] for x in outputs])
         y_hat = torch.cat([x["y_hat"] for x in outputs])
         auc = (
-            AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5
+            AUROC(reduce_op="avg")(pred=y_hat, target=y)
+            if y.float().mean() > 0
+            else 0.5
         )  # skip sanity check
         acc = (y_hat.round() == y).float().mean().item()
         print(f"Epoch {self.current_epoch} val_loss:{avg_loss} auc:{auc}")
@@ -875,7 +868,7 @@ def train_cmd(config: cli.RunOptions):
     train_transform = get_train_transforms(config)
     tta_transform = get_tta_transforms(config)
 
-    test_transform = A.Compose([A.Normalize(), ToTensorV2(),], p=1.0)
+    test_transform = A.Compose([A.Normalize(), ToTensorV2()], p=1.0)
 
     train_fn = train_model_no_cv if config.no_cv else train_model_cv
     train_fn(
