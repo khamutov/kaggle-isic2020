@@ -758,7 +758,7 @@ class IsicModel(pl.LightningModule):
         elif self.config.optim == cli.OPTIM_ADAMW:
             optimizer = torch.optim.AdamW(
                 self.parameters(),
-                lr=self.config.learning_rate,
+                lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
                 weight_decay=self.config.weight_decay,
             )
         elif self.config.optim == cli.OPTIM_SGD:
