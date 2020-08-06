@@ -778,9 +778,7 @@ class IsicModel(pl.LightningModule):
         y = torch.cat([x["y"] for x in outputs])
         y_hat = torch.cat([x["y_hat"] for x in outputs])
         auc = (
-            AUROC(reduce_op="avg")(pred=y_hat, target=y)
-            if y.float().mean() > 0
-            else 0.5
+            AUROC()(pred=y_hat, target=y) if y.float().mean() > 0 else 0.5
         )  # skip sanity check
         acc = (y_hat.round() == y).float().mean().item()
         print(f"Epoch {self.current_epoch} val_loss:{avg_loss} auc:{auc}")
