@@ -183,6 +183,7 @@ options = [
         desc="Path to save trained models",
     ),
     RunOption(name="train", default=True, desc="Enable/disable train").flag(),
+    RunOption(name="hpo", default=False, desc="Enable HPO").flag(),
 ]
 
 
@@ -225,6 +226,7 @@ class RunOptions:
         self.output_path = None
         self.train = None
         self.pos_weight = 10.0
+        self.hpo = False
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 

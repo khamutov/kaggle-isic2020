@@ -8,6 +8,7 @@ import click
 import configobj
 import cv2
 import numpy as np
+import optuna
 import pandas as pd
 import pytorch_lightning as pl
 
@@ -443,7 +444,7 @@ def train_fit(
     return train_result
 
 
-def train_model_no_cv(
+def train_model_cv(
     train_df,
     train_df_2018,
     meta_features,
@@ -458,98 +459,17 @@ def train_model_no_cv(
     oof_folds = []
     oof_names = []
 
-    idxT = np.arange(12)
-    idxV = np.arange(12, 15)
-    fold_idx = 1
+    TRAIN_GROUPS = 15
+    if config.no_cv:
+        train_val_split_at = int(0.8 * TRAIN_GROUPS)
+        splits = [
+            (np.arange(train_val_split_at), np.arange(train_val_split_at, TRAIN_GROUPS))
+        ]
+    else:
+        skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
+        splits = enumerate(skf.split(np.arange(TRAIN_GROUPS)), 1)
 
-    train_idx = train_df.loc[train_df["fold"].isin(idxT)].index
-    train_idx_2018 = train_df_2018.loc[train_df_2018["fold"].isin(idxT * 2)].index
-    val_idx = train_df.loc[train_df["fold"].isin(idxV)].index
-
-    oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
-
-    if config.is_track_mlflow():
-        mlflow.start_run(nested=True, run_name="Fold {}".format(fold_idx))
-        mlflow.log_param("fold", fold_idx)
-
-    print(
-        Fore.CYAN,
-        "-" * 20,
-        Style.RESET_ALL,
-        Fore.MAGENTA,
-        "No CV mode",
-        fold_idx,
-        Style.RESET_ALL,
-        Fore.CYAN,
-        "-" * 20,
-        Style.RESET_ALL,
-    )
-
-    train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
-    train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
-    val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
-
-    train_result = train_fit(
-        train_df=train_fit_df,
-        train_df_2018=train_fit_df_2018,
-        val_df=val_fit_df,
-        train_transform=train_transform,
-        tta_transform=tta_transform,
-        test_transform=test_transform,
-        meta_features=meta_features,
-        config=config,
-        fold_idx=fold_idx,
-    )
-
-    oof_pred.append(train_result.pred)
-    oof_pred_tta.append(train_result.pred_tta)
-    oof_target.append(train_result.target)
-    oof_folds.append(np.ones_like(oof_target[-1], dtype="int8") * fold_idx)
-
-    if config.is_track_mlflow():
-        if train_result.best_val:
-            mlflow.log_metric("best_roc_auc", train_result.best_val)
-        mlflow.end_run()
-
-    oof = np.concatenate(oof_pred).squeeze()
-    oof_tta = np.concatenate(oof_pred_tta).squeeze()
-    true = np.concatenate(oof_target)
-    folds = np.concatenate(oof_folds)
-    auc = roc_auc_score(true, oof) if true.mean() > 0 else 0.5
-    auc_tta = roc_auc_score(true, oof_tta) if true.mean() > 0 else 0.5
-    names = np.concatenate(oof_names)
-
-    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
-    print(Fore.MAGENTA, "OOF ROC AUC    ", auc, Style.RESET_ALL)
-    print(Fore.MAGENTA, "OOF ROC AUC TTA", auc_tta, Style.RESET_ALL)
-    print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
-
-    if config.is_track_mlflow():
-        mlflow.log_metric("oof_roc_auc", auc)
-        mlflow.log_metric("oof_roc_auc_tta", auc_tta)
-
-    # SAVE OOF TO DISK
-    df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
-    df_oof.to_csv("oof.csv", index=False)
-
-
-def train_model_cv(
-    train_df,
-    train_df_2018,
-    meta_features,
-    config,
-    train_transform,
-    tta_transform,
-    test_transform,
-):
-    oof_pred = []
-    oof_pred_tta = []
-    oof_target = []
-    oof_folds = []
-    oof_names = []
-
-    skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
-    for fold_idx, (idxT, idxV) in enumerate(skf.split(np.arange(15)), 1):
+    for fold_idx, (idxT, idxV) in enumerate(splits, 1):
         train_idx = train_df.loc[train_df["fold"].isin(idxT)].index
         train_idx_2018 = train_df_2018.loc[train_df_2018["fold"].isin(idxT * 2)].index
         val_idx = train_df.loc[train_df["fold"].isin(idxV)].index
@@ -603,8 +523,8 @@ def train_model_cv(
     oof_tta = np.concatenate(oof_pred_tta).squeeze()
     true = np.concatenate(oof_target)
     folds = np.concatenate(oof_folds)
-    auc = roc_auc_score(true, oof)
-    auc_tta = roc_auc_score(true, oof_tta)
+    auc = roc_auc_score(true, oof) if true.mean() > 0 else 0.5
+    auc_tta = roc_auc_score(true, oof_tta) if true.mean() > 0 else 0.5
     names = np.concatenate(oof_names)
 
     print(Fore.CYAN, "-" * 60, Style.RESET_ALL)
@@ -614,6 +534,7 @@ def train_model_cv(
 
     if config.is_track_mlflow():
         mlflow.log_metric("oof_roc_auc", auc)
+        mlflow.log_metric("oof_roc_auc_tta", auc_tta)
 
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
@@ -689,7 +610,12 @@ def predict_model(
 
 class IsicModel(pl.LightningModule):
     def __init__(
-        self, output_size, no_columns, config: cli.RunOptions, steps_per_epoch
+        self,
+        output_size,
+        no_columns,
+        config: cli.RunOptions,
+        steps_per_epoch,
+        trial: optuna.trial.Trial = None,
     ):
         super().__init__()
 
@@ -868,8 +794,7 @@ def train_cmd(config: cli.RunOptions):
 
     test_transform = A.Compose([A.Normalize(), ToTensorV2()], p=1.0)
 
-    train_fn = train_model_no_cv if config.no_cv else train_model_cv
-    train_fn(
+    train_model_cv(
         train_df=train_df,
         train_df_2018=train_df_2019,
         meta_features=meta_features,
