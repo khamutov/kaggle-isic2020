@@ -274,7 +274,7 @@ class RunOptions:
         # _tmp_tensor = torch.rand(1).to(self.device)
         # del _tmp_tensor
 
-        # torch.cuda.set_device(self.device)
+        torch.cuda.set_device(f"cuda:{self.device}")
 
         if self.is_track_mlflow():
             if not self.mlflow_experiment:
