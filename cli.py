@@ -1,6 +1,4 @@
 import os
-import warnings
-from multiprocessing import set_start_method
 from pathlib import Path
 from typing import Any, Union
 
@@ -94,44 +92,97 @@ options = [
     RunOption(name="learning_rate", default=8e-4, desc="Learning Rate"),
     RunOption(name="weight_decay", default=0.0, desc="Decay Factor"),
     RunOption(name="lr_factor", default=0.4, desc=""),
-    RunOption(name="loss_bce_label_smoothing", default=0.03, desc="Label smoothing for BCE loss"),
+    RunOption(
+        name="loss_bce_label_smoothing",
+        default=0.03,
+        desc="Label smoothing for BCE loss",
+    ),
     RunOption(name="num_workers", default=0, desc="num epoches"),
-    RunOption(name="input_size", default="256", desc="input image sizes").integer().choice(["256", "384"]),
-    RunOption(name="datasets_path", default=None, desc="path to datasets directory").path(),
-    RunOption(name="dataset_official", default=None, desc="path to official ISIC dataset").path(),
+    RunOption(name="input_size", default="256", desc="input image sizes")
+    .integer()
+    .choice(["256", "384"]),
+    RunOption(
+        name="datasets_path", default=None, desc="path to datasets directory"
+    ).path(),
+    RunOption(
+        name="dataset_official", default=None, desc="path to official ISIC dataset"
+    ).path(),
     RunOption(name="mlflow_tracking_url", default=None, desc="mlflow tracking url"),
     RunOption(name="mlflow_experiment", default=None, desc="mlflow tracking url"),
     RunOption(name="device", default=None, desc="device: cpu, cuda, cuda:1"),
     RunOption(name="tta", default=15, desc="test time augmentation steps"),
-    RunOption(name="dry_run", default=False,
-              desc="run train on small set, do not track in MLflow. For sanity check only.").flag(),
-    RunOption(name="no_cv", default=False,
-              desc="Do not make cross-validation folds (for testing hypothesis).").flag(),
-    RunOption(name="optim", default=OPTIM_ADAMW, desc="Optimizer").choice([OPTIM_ADAM, OPTIM_ADAMW, OPTIM_SGD]),
-    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice([SCHED_1CYC, SCHED_COSINE, SCHED_DEOTTE]),
-    RunOption(name="model", default=MODEL_EFFICIENTNET_B0, desc="Model name").choice([
-        MODEL_EFFICIENTNET_B0,
-        MODEL_EFFICIENTNET_B1,
-        MODEL_EFFICIENTNET_B2,
-        MODEL_EFFICIENTNET_B3,
-        MODEL_EFFICIENTNET_B4,
-        MODEL_EFFICIENTNET_B5,
-        MODEL_EFFICIENTNET_B6,
-        MODEL_EFFICIENTNET_B7]),
-    RunOption(name="advanced_hair_augmentation", default=False, desc="Augmentation AdvancedHairAugmentation").flag(),
-    RunOption(name="jpeg_compression", default=True, desc="Augmentation JpegCompression").flag(),
+    RunOption(
+        name="dry_run",
+        default=False,
+        desc="run train on small set, do not track in MLflow. For sanity check only.",
+    ).flag(),
+    RunOption(
+        name="no_cv",
+        default=False,
+        desc="Do not make cross-validation folds (for testing hypothesis).",
+    ).flag(),
+    RunOption(name="optim", default=OPTIM_ADAMW, desc="Optimizer").choice(
+        [OPTIM_ADAM, OPTIM_ADAMW, OPTIM_SGD]
+    ),
+    RunOption(name="scheduler", default=SCHED_1CYC, desc="Scheduler").choice(
+        [SCHED_1CYC, SCHED_COSINE, SCHED_DEOTTE]
+    ),
+    RunOption(name="model", default=MODEL_EFFICIENTNET_B0, desc="Model name").choice(
+        [
+            MODEL_EFFICIENTNET_B0,
+            MODEL_EFFICIENTNET_B1,
+            MODEL_EFFICIENTNET_B2,
+            MODEL_EFFICIENTNET_B3,
+            MODEL_EFFICIENTNET_B4,
+            MODEL_EFFICIENTNET_B5,
+            MODEL_EFFICIENTNET_B6,
+            MODEL_EFFICIENTNET_B7,
+        ]
+    ),
+    RunOption(
+        name="advanced_hair_augmentation",
+        default=False,
+        desc="Augmentation AdvancedHairAugmentation",
+    ).flag(),
+    RunOption(
+        name="jpeg_compression", default=True, desc="Augmentation JpegCompression"
+    ).flag(),
     RunOption(name="rotate", default=True, desc="Augmentation Rotate").flag(),
-    RunOption(name="optical_distortion", default=True, desc="Augmentation OpticalDistortion").flag(),
-    RunOption(name="grid_distortion", default=True, desc="Augmentation GridDistortion").flag(),
-    RunOption(name="piecewise_affine", default=False, desc="Augmentation IAAPiecewiseAffine").flag(),
-    RunOption(name="horizontal_flip", default=True, desc="Augmentation HorizontalFlip").flag(),
-    RunOption(name="vertical_flip", default=True, desc="Augmentation VerticalFlip").flag(),
-    RunOption(name="gaussian_blur", default=True, desc="Augmentation GaussianBlur").flag(),
-    RunOption(name="random_brightness_contrast", default=False, desc="Augmentation RandomBrightnessContrast").flag(),
-    RunOption(name="hue_saturation_value", default=True, desc="Augmentation HueSaturationValue").flag(),
+    RunOption(
+        name="optical_distortion", default=True, desc="Augmentation OpticalDistortion"
+    ).flag(),
+    RunOption(
+        name="grid_distortion", default=True, desc="Augmentation GridDistortion"
+    ).flag(),
+    RunOption(
+        name="piecewise_affine", default=False, desc="Augmentation IAAPiecewiseAffine"
+    ).flag(),
+    RunOption(
+        name="horizontal_flip", default=True, desc="Augmentation HorizontalFlip"
+    ).flag(),
+    RunOption(
+        name="vertical_flip", default=True, desc="Augmentation VerticalFlip"
+    ).flag(),
+    RunOption(
+        name="gaussian_blur", default=True, desc="Augmentation GaussianBlur"
+    ).flag(),
+    RunOption(
+        name="random_brightness_contrast",
+        default=False,
+        desc="Augmentation RandomBrightnessContrast",
+    ).flag(),
+    RunOption(
+        name="hue_saturation_value",
+        default=True,
+        desc="Augmentation HueSaturationValue",
+    ).flag(),
     RunOption(name="cutout", default=True, desc="Augmentation Cutout").flag(),
-    RunOption(name="output_path", default=OUTPUT_DEFAULT_PATH, desc="Path to save trained models"),
-    RunOption(name="train", default=True, desc="Enable/disable train").flag()
+    RunOption(
+        name="output_path",
+        default=OUTPUT_DEFAULT_PATH,
+        desc="Path to save trained models",
+    ),
+    RunOption(name="train", default=True, desc="Enable/disable train").flag(),
 ]
 
 
@@ -178,9 +229,11 @@ class RunOptions:
             self.__setattr__(option.name.split("/")[0], option.default)
 
     def is_track_mlflow(self):
-        return self.mlflow_tracking_url is not None \
-               and len(self.mlflow_tracking_url) > 0 \
-               and not self.dry_run
+        return (
+            self.mlflow_tracking_url is not None
+            and len(self.mlflow_tracking_url) > 0
+            and not self.dry_run
+        )
 
     @property
     def device(self):
@@ -203,7 +256,9 @@ class RunOptions:
                 else:
                     raise Exception(f"there is no default batch for model {self.model}")
             else:
-                raise Exception(f"there is no default batch for input size {self.input_size}")
+                raise Exception(
+                    f"there is no default batch for input size {self.input_size}"
+                )
 
         tqdm.pandas()
         # warnings.filterwarnings("ignore")
@@ -219,7 +274,9 @@ class RunOptions:
 
         if self.is_track_mlflow():
             if not self.mlflow_experiment:
-                raise Exception("mlflow experiment not set! Use option --mlflow_experiment")
+                raise Exception(
+                    "mlflow experiment not set! Use option --mlflow_experiment"
+                )
 
             mlflow.set_tracking_uri(self.mlflow_tracking_url)
             mlflow.set_experiment(self.mlflow_experiment)
@@ -227,19 +284,19 @@ class RunOptions:
 
             # overrride output path if not set
             if self.output_path == OUTPUT_DEFAULT_PATH:
-                self.output_path = str(Path(os.getcwd()) / "models" / self.model / run_info.info.run_id)
+                self.output_path = str(
+                    Path(os.getcwd()) / "models" / self.model / run_info.info.run_id
+                )
             mlflow.log_params(self.__dict__)
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
 
         # try:
-        #     set_start_method('spawn')
+        #     set_start_method("spawn")
         # except RuntimeError:
         #     pass
 
-
-
     def dataset_2020(self):
-        return self.datasets_path / f'jpeg-melanoma-{self.input_size}x{self.input_size}'
+        return self.datasets_path / f"jpeg-melanoma-{self.input_size}x{self.input_size}"
 
     def dataset_2019(self):
-        return self.datasets_path / f'jpeg-isic2019-{self.input_size}x{self.input_size}'
+        return self.datasets_path / f"jpeg-isic2019-{self.input_size}x{self.input_size}"
