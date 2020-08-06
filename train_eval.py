@@ -411,9 +411,10 @@ def train_fit(
         # Filenames for each trial must be made unique in order to access each checkpoint.
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
             Path(config.output_path) / ("trial_{}_".format(trial.number) + "{epoch}"),
-            monitor="val_acc",
+            monitor="val_auc",
+            mode="max",
         )
-        early_stop_callback = PyTorchLightningPruningCallback(trial, monitor="val_acc")
+        early_stop_callback = PyTorchLightningPruningCallback(trial, monitor="val_auc")
     else:
         early_stop_callback = False
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
