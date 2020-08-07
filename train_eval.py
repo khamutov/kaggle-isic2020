@@ -410,7 +410,7 @@ def train_fit(
     if config.hpo:
         # Filenames for each trial must be made unique in order to access each checkpoint.
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            Path(config.output_path) / ("trial_{}_".format(trial.number) + "{epoch}"),
+            Path(config.output_path) / (f"trial_{trial.number}_" + "{epoch}"),
             monitor="val_auc",
             mode="max",
         )
@@ -752,14 +752,18 @@ class IsicModel(pl.LightningModule):
         if self.config.optim == cli.OPTIM_ADAM:
             optimizer = torch.optim.Adam(
                 self.parameters(),
+                # lr=self.config.learning_rate,
                 lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
-                weight_decay=self.config.weight_decay,
+                # weight_decay=self.config.weight_decay,
+                weight_decay=self.trial.suggest_loguniform("wd", 1e-7, 1e-2),
             )
         elif self.config.optim == cli.OPTIM_ADAMW:
             optimizer = torch.optim.AdamW(
                 self.parameters(),
+                # lr=self.config.learning_rate,
                 lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
-                weight_decay=self.config.weight_decay,
+                # weight_decay=self.config.weight_decay,
+                weight_decay=self.trial.suggest_loguniform("wd", 1e-7, 1e-2),
             )
         elif self.config.optim == cli.OPTIM_SGD:
             optimizer = torch.optim.SGD(
@@ -772,7 +776,7 @@ class IsicModel(pl.LightningModule):
             raise Exception(f"unknown optimizer f{self.config.optim}")
 
         if self.config.scheduler == cli.SCHED_1CYC:
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            scheduler_instance = torch.optim.lr_scheduler.OneCycleLR(
                 max_lr=self.config.learning_rate,
                 epochs=self.config.epochs,
                 optimizer=optimizer,
@@ -783,6 +787,12 @@ class IsicModel(pl.LightningModule):
                 base_momentum=0.90,
                 max_momentum=0.95,
             )
+            scheduler = {
+                "scheduler": scheduler_instance,
+                "monitor": "val_loss",
+                "interval": "step",
+                "frequency": 1,
+            }
         elif self.config.scheduler == cli.SCHED_COSINE:
             scheduler = get_cosine_schedule_with_warmup(
                 optimizer=optimizer,
@@ -829,7 +839,11 @@ def train_cmd(config: cli.RunOptions):
         )
 
     if config.hpo:
-        pruner = optuna.pruners.MedianPruner()
+        pruner = (
+            optuna.pruners.MedianPruner()
+            if config.hpo_pruning
+            else optuna.pruners.NopPruner()
+        )
         study = optuna.create_study(
             direction="maximize",
             study_name="isic2020-study",
