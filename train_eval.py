@@ -781,7 +781,7 @@ class IsicModel(pl.LightningModule):
                 epochs=self.config.epochs,
                 optimizer=optimizer,
                 steps_per_epoch=self.steps_per_epoch,
-                pct_start=0.1,
+                pct_start=0.5,
                 div_factor=10,
                 final_div_factor=100,
                 base_momentum=0.90,
