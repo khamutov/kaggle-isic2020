@@ -185,6 +185,7 @@ options = [
     RunOption(name="train", default=True, desc="Enable/disable train").flag(),
     RunOption(name="hpo", default=False, desc="Enable HPO").flag(),
     RunOption(name="hpo_n_trials", default=10, desc="Number trials for HPO"),
+    RunOption(name="hpo_pruning", default=True, desc="Enable/disable pruning").flag(),
 ]
 
 
@@ -229,6 +230,7 @@ class RunOptions:
         self.pos_weight = 10.0
         self.hpo = False
         self.hpo_n_trials = 0
+        self.hpo_pruning = True
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
