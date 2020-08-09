@@ -30,6 +30,7 @@ from tqdm.auto import tqdm, trange
 
 import cli
 from augmentation.hairs import AdvancedHairAugmentation
+from utils.seeds import seed_everything
 
 try:
     import mlflow
@@ -428,7 +429,8 @@ def train_fit(
         precision=16 if config.device else 32,
         max_epochs=config.epochs,
         # distributed_backend='ddp',
-        benchmark=True,
+        benchmark=False,
+        deterministic=True,
         early_stop_callback=early_stop_callback,
         checkpoint_callback=checkpoint_callback,
     )
@@ -451,7 +453,7 @@ def train_fit(
         for _ in trange(config.tta, desc="val TTA", leave=False):
             trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
 
-            fold_preds_tta += torch.load("preds.pt")
+            fold_preds_tta += torch.load(f"preds_{trial.number}.pt")
         fold_preds_tta /= config.tta
         train_result.pred_tta = fold_preds_tta.cpu().numpy()
 
@@ -704,6 +706,8 @@ class IsicModel(pl.LightningModule):
 
         y_hat = self(data[0], data[1]).flatten()
         y_smooth = self.label_smoothing(y)
+
+        # CB_loss(y_hat, y, [10000, 1], 2, "focal", 0.9999, 2.0)
         loss = F.binary_cross_entropy_with_logits(
             y_hat, y_smooth, pos_weight=torch.tensor(self.config.pos_weight)
         )
@@ -752,18 +756,14 @@ class IsicModel(pl.LightningModule):
         if self.config.optim == cli.OPTIM_ADAM:
             optimizer = torch.optim.Adam(
                 self.parameters(),
-                # lr=self.config.learning_rate,
-                lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
-                # weight_decay=self.config.weight_decay,
-                weight_decay=self.trial.suggest_loguniform("wd", 1e-7, 1e-2),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
             )
         elif self.config.optim == cli.OPTIM_ADAMW:
             optimizer = torch.optim.AdamW(
                 self.parameters(),
-                # lr=self.config.learning_rate,
-                lr=self.trial.suggest_loguniform("lr", 1e-6, 1e-2),
-                # weight_decay=self.config.weight_decay,
-                weight_decay=self.trial.suggest_loguniform("wd", 1e-7, 1e-2),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
             )
         elif self.config.optim == cli.OPTIM_SGD:
             optimizer = torch.optim.SGD(
@@ -812,6 +812,15 @@ class IsicModel(pl.LightningModule):
 
         return [optimizer], [scheduler]
 
+    def on_train_start(self):
+        self.freeze_bn()
+
+    def freeze_bn(self):
+        """Freeze BatchNorm layers."""
+        for layer in self.features.modules():
+            if isinstance(layer, nn.BatchNorm2d):
+                layer.eval()
+
 
 def train_cmd(config: cli.RunOptions):
 
@@ -827,6 +836,14 @@ def train_cmd(config: cli.RunOptions):
     test_transform = A.Compose([A.Normalize(), ToTensorV2()], p=1.0)
 
     def train_fn(trial):
+
+        if config.hpo:
+            config.learning_rate = trial.suggest_loguniform("lr", 1e-6, 1e-2)
+            config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-2)
+            print("lr", config.learning_rate, "wd", config.weight_decay)
+
+        seed_everything(1337)
+
         return train_model_cv(
             train_df=train_df,
             train_df_2018=train_df_2019,
