@@ -95,14 +95,14 @@ def get_train_transforms(config):
             #                   height=resolution, width=resolution, p=1.0),
             A.HorizontalFlip(p=0.5) if config.horizontal_flip else A.NoOp(),
             A.VerticalFlip(p=0.5) if config.vertical_flip else A.NoOp(),
-            A.GaussianBlur(p=0.3) if not config.gaussian_blur else A.NoOp(),
+            A.GaussianBlur(p=0.3) if config.gaussian_blur else A.NoOp(),
             A.OneOf(
                 [
                     A.RandomBrightnessContrast()
-                    if not config.random_brightness_contrast
+                    if config.random_brightness_contrast
                     else A.NoOp(),
                     A.HueSaturationValue(hue_shift_limit=0)
-                    if not config.hue_saturation_value
+                    if config.hue_saturation_value
                     else A.NoOp(),
                 ]
             ),
@@ -631,6 +631,14 @@ def predict_model(
     print(Fore.MAGENTA, "saved to submission.csv", Style.RESET_ALL)
 
 
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+
+
 class IsicModel(pl.LightningModule):
     def __init__(
         self,
@@ -649,7 +657,17 @@ class IsicModel(pl.LightningModule):
 
         self.no_columns = no_columns
 
-        self.features = EfficientNet.from_pretrained(config.model)
+        if "efficientnet" in config.model:
+            self.features = EfficientNet.from_pretrained(config.model)
+            self.eff_net_out_features = getattr(self.features, "_fc").in_features
+        elif config.model == "resnest50":
+            torch.hub.list("zhanghang1989/ResNeSt", force_reload=True)
+            # load pretrained models, using ResNeSt-50 as an example
+            self.features = torch.hub.load(
+                "zhanghang1989/ResNeSt", "resnest50", pretrained=True
+            )
+            self.eff_net_out_features = getattr(self.features, "fc").in_features
+            self.features.fc = Identity()
 
         # (CSV) or Meta Features
         meta_features_out = 250
@@ -668,8 +686,6 @@ class IsicModel(pl.LightningModule):
             nn.Dropout(p=0.3),
         )
 
-        self.eff_net_out_features = getattr(self.features, "_fc").in_features
-
         fc_hidden_size = 250
         self.classification = nn.Sequential(
             nn.Linear(self.eff_net_out_features + meta_features_out, fc_hidden_size),
@@ -678,10 +694,17 @@ class IsicModel(pl.LightningModule):
 
     def forward(self, image, csv_data):
         # IMAGE CNN
-        image = self.features.extract_features(image)
+        if "efficientnet" in self.config.model:
+            image = self.features.extract_features(image)
+        elif self.config.model == "resnest50":
+            image = self.features(image)
 
         # image = F.avg_pool2d(image, image.size()[2:]).reshape(-1, self.eff_net_out_features)
-        features = F.adaptive_avg_pool2d(image, 1)
+        if "efficientnet" in self.config.model:
+            features = F.adaptive_avg_pool2d(image, 1)
+        else:
+            features = image
+
         image = features.view(features.size(0), -1)
 
         # CSV FNN
@@ -781,7 +804,7 @@ class IsicModel(pl.LightningModule):
                 epochs=self.config.epochs,
                 optimizer=optimizer,
                 steps_per_epoch=self.steps_per_epoch,
-                pct_start=0.5,
+                pct_start=self.config.sched_warmup,
                 div_factor=10,
                 final_div_factor=100,
                 base_momentum=0.90,
@@ -812,8 +835,8 @@ class IsicModel(pl.LightningModule):
 
         return [optimizer], [scheduler]
 
-    def on_train_start(self):
-        self.freeze_bn()
+    # def on_train_start(self):
+    #     self.freeze_bn()
 
     def freeze_bn(self):
         """Freeze BatchNorm layers."""

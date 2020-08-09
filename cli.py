@@ -59,6 +59,7 @@ MODEL_EFFICIENTNET_B4 = "efficientnet-b4"
 MODEL_EFFICIENTNET_B5 = "efficientnet-b5"
 MODEL_EFFICIENTNET_B6 = "efficientnet-b6"
 MODEL_EFFICIENTNET_B7 = "efficientnet-b7"
+MODEL_RESNEST50 = "resnest50"
 
 batches = {
     256: {
@@ -137,6 +138,7 @@ options = [
             MODEL_EFFICIENTNET_B5,
             MODEL_EFFICIENTNET_B6,
             MODEL_EFFICIENTNET_B7,
+            MODEL_RESNEST50,
         ]
     ),
     RunOption(
@@ -186,6 +188,7 @@ options = [
     RunOption(name="hpo", default=False, desc="Enable HPO").flag(),
     RunOption(name="hpo_n_trials", default=10, desc="Number trials for HPO"),
     RunOption(name="hpo_pruning", default=True, desc="Enable/disable pruning").flag(),
+    RunOption(name="sched_warmup", default=0.5, desc="warmup percent of all epochs"),
 ]
 
 
@@ -231,6 +234,7 @@ class RunOptions:
         self.hpo = False
         self.hpo_n_trials = 0
         self.hpo_pruning = True
+        self.sched_warmup = 0.1
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
