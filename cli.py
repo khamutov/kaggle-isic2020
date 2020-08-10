@@ -166,16 +166,16 @@ options = [
         name="vertical_flip", default=True, desc="Augmentation VerticalFlip"
     ).flag(),
     RunOption(
-        name="gaussian_blur", default=True, desc="Augmentation GaussianBlur"
+        name="gaussian_blur", default=False, desc="Augmentation GaussianBlur"
     ).flag(),
     RunOption(
         name="random_brightness_contrast",
-        default=False,
+        default=True,
         desc="Augmentation RandomBrightnessContrast",
     ).flag(),
     RunOption(
         name="hue_saturation_value",
-        default=True,
+        default=False,
         desc="Augmentation HueSaturationValue",
     ).flag(),
     RunOption(name="cutout", default=True, desc="Augmentation Cutout").flag(),

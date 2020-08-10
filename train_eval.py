@@ -853,19 +853,21 @@ def train_cmd(config: cli.RunOptions):
         train_df = train_df.head(640)
         train_df_2019 = train_df_2019.head(640)
 
-    train_transform = get_train_transforms(config)
     tta_transform = get_tta_transforms(config)
 
     test_transform = A.Compose([A.Normalize(), ToTensorV2()], p=1.0)
 
     def train_fn(trial):
 
+        seed = 1253
         if config.hpo:
             config.learning_rate = trial.suggest_loguniform("lr", 1e-6, 1e-2)
             config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-2)
             print("lr", config.learning_rate, "wd", config.weight_decay)
 
-        seed_everything(1337)
+        train_transform = get_train_transforms(config)
+
+        seed_everything(seed)
 
         return train_model_cv(
             train_df=train_df,
@@ -910,6 +912,7 @@ def train_cmd(config: cli.RunOptions):
     if config.no_cv:
         print(Fore.MAGENTA, "Prediction on --no_cv disabled", Style.RESET_ALL)
     else:
+        train_transform = get_train_transforms(config)
         predict_model(
             test_df=test_df,
             meta_features=meta_features,
