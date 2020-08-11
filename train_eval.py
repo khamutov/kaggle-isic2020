@@ -1,5 +1,7 @@
+import glob
 import math
 import os
+import uuid
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -340,7 +342,9 @@ def train_fit(
     train_result = TrainResult()
     train_result.names = val_df["image_name"].to_numpy()
 
-    model_path = Path(config.output_path) / f"model{fold_idx}.pth"
+    model_path = (
+        Path(config.output_path) / f"model_fold={fold_idx}_epoch={{epoch}}.ckpt"
+    )
 
     train_dataset_2020 = MelanomaDataset(
         df=train_df,
@@ -400,18 +404,51 @@ def train_fit(
     tb_logger = TensorBoardLogger(
         save_dir=config.output_path, name=f"{config.model}", version=f"fold_{fold_idx}"
     )
-    model = IsicModel(
-        output_size=output_size,
-        no_columns=len(meta_features),
-        config=config,
-        steps_per_epoch=int(len(train_dataset) / config.batch_size),
-        trial=trial,
-    )
+
+    # find model checkpoint for this fold
+    pattern = str(Path(config.output_path) / f"model_fold={fold_idx}_epoch=*.ckpt")
+    matched_checkpoints = glob.glob(pattern)
+    if config.train:
+        if len(matched_checkpoints) > 0:
+            print(
+                Fore.RED,
+                f"There is already exist a checkpoint for fold {fold_idx} in path {config.output_path}",
+                Style.RESET_ALL,
+            )
+            raise Exception("output path already has model!")
+
+        if config.is_track_mlflow():
+            run_id = mlflow.active_run().info.run_id
+        else:
+            run_id = str(uuid.uuid4())
+
+        model = IsicModel(
+            output_size=output_size,
+            no_columns=len(meta_features),
+            config=config,
+            steps_per_epoch=int(len(train_dataset) / config.batch_size),
+            run_id=run_id,
+        )
+    else:
+        if len(matched_checkpoints) != 1:
+            print(
+                Fore.RED,
+                f"Couldn't find best model for fold {fold_idx}",
+                Style.RESET_ALL,
+            )
+            print(
+                Fore.RED,
+                f"Found {len(matched_checkpoints)} files for pattern {str(pattern)}",
+                Style.RESET_ALL,
+            )
+            raise Exception("cannot load model from checkpoint")
+        model = IsicModel.load_from_checkpoint(checkpoint_path=matched_checkpoints[0])
+        run_id = model.run_id  # extract run_id for predictions
 
     if config.hpo:
         # Filenames for each trial must be made unique in order to access each checkpoint.
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            Path(config.output_path) / (f"trial_{trial.number}_" + "{epoch}"),
+            Path(config.output_path) / f"trial_{trial.number}_{{epoch}}",
             monitor="val_auc",
             mode="max",
         )
@@ -434,11 +471,17 @@ def train_fit(
         early_stop_callback=early_stop_callback,
         checkpoint_callback=checkpoint_callback,
     )
-    trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
+    if config.train:
+        trainer.fit(model, train_dataloader=train_loader, val_dataloaders=val_loader)
 
     # build OOF metrics
-    trainer.test(test_dataloaders=val_loader, ckpt_path="best")
-    fold_preds = torch.load(f"preds_{trial.number}.pt")
+    if config.train:
+        trainer.test(test_dataloaders=val_loader, ckpt_path="best")
+    else:
+        trainer.test(model=model, test_dataloaders=val_loader)
+
+    fold_preds = torch.load(f"preds_{run_id}.pt")
+    os.remove(f"preds_{run_id}.pt")
     best_auc = (
         roc_auc_score(val_df["target"].values, fold_preds.cpu().numpy())
         if val_df["target"].mean() > 0
@@ -451,9 +494,13 @@ def train_fit(
     if not config.hpo:
         fold_preds_tta = torch.zeros((len(val_tta))).type_as(fold_preds)
         for _ in trange(config.tta, desc="val TTA", leave=False):
-            trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
+            if config.train:
+                trainer.test(test_dataloaders=val_tta_loader, ckpt_path="best")
+            else:
+                trainer.test(model=model, test_dataloaders=val_tta_loader)
 
-            fold_preds_tta += torch.load(f"preds_{trial.number}.pt")
+            fold_preds_tta += torch.load(f"preds_{run_id}.pt")
+            os.remove(f"preds_{run_id}.pt")
         fold_preds_tta /= config.tta
         train_result.pred_tta = fold_preds_tta.cpu().numpy()
 
@@ -642,16 +689,19 @@ class Identity(nn.Module):
 class IsicModel(pl.LightningModule):
     def __init__(
         self,
-        output_size,
-        no_columns,
+        *,
+        output_size: int,
+        no_columns: int,
         config: cli.RunOptions,
-        steps_per_epoch,
-        trial: optuna.trial.Trial,
+        steps_per_epoch: int,
+        run_id: str,
     ):
         super().__init__()
 
+        self.save_hyperparameters()
+
         self.config = config
-        self.trial = trial
+        self.run_id = run_id
 
         self.steps_per_epoch = steps_per_epoch
 
@@ -773,7 +823,7 @@ class IsicModel(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         y_hat = torch.cat([x["y_hat"] for x in outputs])
-        torch.save(y_hat, f"preds_{self.trial.number}.pt")
+        torch.save(y_hat, f"preds_{self.run_id}.pt")
 
     def configure_optimizers(self):
         if self.config.optim == cli.OPTIM_ADAM:
@@ -911,6 +961,7 @@ def train_cmd(config: cli.RunOptions):
 
     if config.no_cv:
         print(Fore.MAGENTA, "Prediction on --no_cv disabled", Style.RESET_ALL)
+        print(Fore.MAGENTA, f"Model saved to {config.output_path}", Style.RESET_ALL)
     else:
         train_transform = get_train_transforms(config)
         predict_model(
