@@ -430,7 +430,7 @@ def train_fit(
         max_epochs=config.epochs,
         # distributed_backend='ddp',
         benchmark=False,
-        deterministic=True,
+        deterministic=False,
         early_stop_callback=early_stop_callback,
         checkpoint_callback=checkpoint_callback,
     )
@@ -861,8 +861,8 @@ def train_cmd(config: cli.RunOptions):
 
         seed = 1253
         if config.hpo:
-            config.learning_rate = trial.suggest_loguniform("lr", 1e-6, 1e-2)
-            config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-2)
+            config.learning_rate = trial.suggest_loguniform("lr", 1e-5, 1e-3)
+            config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-4)
             print("lr", config.learning_rate, "wd", config.weight_decay)
 
         train_transform = get_train_transforms(config)
