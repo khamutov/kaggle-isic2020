@@ -90,8 +90,8 @@ options = [
     RunOption(name="batch_size", default=None, desc="Train batch size.").integer(),
     RunOption(name="patience", default=10, desc="early stopping patience"),
     RunOption(name="lr_patience", default=1, desc="patience for learning rate"),
-    RunOption(name="learning_rate", default=8e-4, desc="Learning Rate"),
-    RunOption(name="weight_decay", default=0.0, desc="Decay Factor"),
+    RunOption(name="learning_rate", default=0.000311878285355134, desc="Learning Rate"),
+    RunOption(name="weight_decay", default=6.191958838098266e-05, desc="Decay Factor"),
     RunOption(name="lr_factor", default=0.4, desc=""),
     RunOption(
         name="loss_bce_label_smoothing",
@@ -188,7 +188,7 @@ options = [
     RunOption(name="hpo", default=False, desc="Enable HPO").flag(),
     RunOption(name="hpo_n_trials", default=10, desc="Number trials for HPO"),
     RunOption(name="hpo_pruning", default=True, desc="Enable/disable pruning").flag(),
-    RunOption(name="sched_warmup", default=0.5, desc="warmup percent of all epochs"),
+    RunOption(name="sched_warmup", default=0.1, desc="warmup percent of all epochs"),
 ]
 
 
