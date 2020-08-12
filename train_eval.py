@@ -714,7 +714,7 @@ def predict_model(
         dict(image_name=test_df["image_name"].to_numpy(), target=preds.cpu().numpy(),)
     )
     submission = submission.sort_values("image_name")
-    submission_filename = config.output_path / "submission.csv"
+    submission_filename = Path(config.output_path) / "submission.csv"
     submission.to_csv(submission_filename, index=False)
 
     print(Fore.MAGENTA, f"saved to {submission_filename}", Style.RESET_ALL)
