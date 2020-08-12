@@ -235,7 +235,7 @@ class RunOptions:
         self.hpo_n_trials = 0
         self.hpo_pruning = True
         self.sched_warmup = 0.1
-        self.alpha = 0.7300593232355836
+        self.alpha = 0.75
         self.gamma = 2.0
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
@@ -312,3 +312,6 @@ class RunOptions:
 
     def dataset_2019(self):
         return self.datasets_path / f"jpeg-isic2019-{self.input_size}x{self.input_size}"
+
+    def dataset_external_v2(self):
+        return self.datasets_path / f"malignant-v2-{self.input_size}x{self.input_size}"

@@ -53,21 +53,15 @@ FOLDS = 5
 def get_tta_transforms(config):
     return A.Compose(
         [
-            A.NoOp(),  # it's here because it calls random.random and change results
-            A.JpegCompression(p=0.5),
+            A.NoOp(),
+            A.NoOp(),
             A.Rotate(limit=80, p=1.0),
-            A.OneOf(
-                [
-                    A.NoOp(),
-                    A.GridDistortion() if config.grid_distortion else A.NoOp(),
-                    A.NoOp(),
-                ]
-            ),
+            A.OneOf([A.NoOp(), A.NoOp(), A.NoOp()]),
             # A.RandomSizedCrop(min_max_height=(int(resolution*0.7), input_res),
             #                   height=resolution, width=resolution, p=1.0),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
             A.NoOp(),
+            A.NoOp(),
+            A.GaussianBlur(p=0.3) if config.gaussian_blur else A.NoOp(),
             A.OneOf([A.NoOp(), A.HueSaturationValue(hue_shift_limit=0)]),
             A.NoOp(),
             A.Normalize(),
@@ -242,6 +236,7 @@ class MelanomaDataset(Dataset):
 def load_dataset(config: cli.RunOptions):
     train_df = pd.read_csv(config.dataset_2020() / "train.csv")
     train_df_2019 = pd.read_csv(config.dataset_2019() / "train.csv")
+    train_df_external = pd.read_csv(config.dataset_external_v2() / "train_malig_2.csv")
 
     train_df["fold"] = train_df["tfrecord"]
     train_df_2019["fold"] = train_df_2019["tfrecord"]
@@ -249,11 +244,13 @@ def load_dataset(config: cli.RunOptions):
 
     train_df["sex"] = train_df["sex"].map({"male": 1, "female": 0})
     train_df_2019["sex"] = train_df_2019["sex"].map({"male": 1, "female": 0})
+    train_df_external["sex"] = train_df_external["sex"].map({"male": 1, "female": 0})
 
     test_df["sex"] = test_df["sex"].map({"male": 1, "female": 0})
 
     train_df["sex"] = train_df["sex"].fillna(-1)
     train_df_2019["sex"] = train_df_2019["sex"].fillna(-1)
+    train_df_external["sex"] = train_df_external["sex"].fillna(-1)
 
     test_df["sex"] = test_df["sex"].fillna(-1)
 
@@ -263,12 +260,14 @@ def load_dataset(config: cli.RunOptions):
     )
     train_df["age_approx"] = train_df["age_approx"].fillna(imp_mean)
     train_df_2019["age_approx"] = train_df_2019["age_approx"].fillna(imp_mean)
+    train_df_external["age_approx"] = train_df_external["age_approx"].fillna(imp_mean)
 
     imp_mean_test = (test_df["age_approx"].sum()) / (test_df["age_approx"].count())
     test_df["age_approx"] = test_df["age_approx"].fillna(imp_mean_test)
 
     train_df["patient_id"] = train_df["patient_id"].fillna(0)
     train_df_2019["patient_id"] = train_df_2019["patient_id"].fillna(0)
+    train_df_external["patient_id"] = train_df_external["patient_id"].fillna(0)
 
     # OHE
     # TODO: make on sklearn
@@ -277,6 +276,7 @@ def load_dataset(config: cli.RunOptions):
         [
             train_df["anatom_site_general_challenge"],
             train_df_2019["anatom_site_general_challenge"],
+            train_df_external["anatom_site_general_challenge"],
             test_df["anatom_site_general_challenge"],
         ],
         ignore_index=True,
@@ -292,12 +292,26 @@ def load_dataset(config: cli.RunOptions):
         ],
         axis=1,
     )
+    train_df_external = pd.concat(
+        [
+            train_df_external,
+            dummies.iloc[
+                train_df.shape[0]
+                + train_df_2019.shape[0] : train_df.shape[0]
+                + train_df_2019.shape[0]
+                + train_df_external.shape[0]
+            ].reset_index(drop=True),
+        ],
+        axis=1,
+    )
     test_df = pd.concat(
         [
             test_df,
-            dummies.iloc[train_df.shape[0] + train_df_2019.shape[0] :].reset_index(
-                drop=True
-            ),
+            dummies.iloc[
+                train_df.shape[0]
+                + train_df_2019.shape[0]
+                + train_df_external.shape[0] :
+            ].reset_index(drop=True),
         ],
         axis=1,
     )
@@ -310,8 +324,11 @@ def load_dataset(config: cli.RunOptions):
     test_df = test_df.drop(["anatom_site_general_challenge"], axis=1)
     train_df = train_df.drop(["anatom_site_general_challenge"], axis=1)
     train_df_2019 = train_df_2019.drop(["anatom_site_general_challenge"], axis=1)
+    train_df_external = train_df_external.drop(
+        ["anatom_site_general_challenge"], axis=1
+    )
 
-    return train_df, train_df_2019, test_df, meta_features
+    return train_df, train_df_2019, train_df_external, test_df, meta_features
 
 
 @dataclass
@@ -329,6 +346,7 @@ class TrainResult:
 def train_fit(
     train_df,
     train_df_2018,
+    train_df_external,
     val_df,
     train_transform,
     tta_transform,
@@ -361,8 +379,15 @@ def train_fit(
         transforms=train_transform,
         meta_features=meta_features,
     )
+    train_dataset_external = MelanomaDataset(
+        df=train_df_external,
+        imfolder=config.dataset_external_v2() / f"jpeg{config.input_size}",
+        is_train=True,
+        transforms=train_transform,
+        meta_features=meta_features,
+    )
     train_dataset = torch.utils.data.ConcatDataset(
-        [train_dataset_2020, train_dataset_2018]
+        [train_dataset_2020, train_dataset_2018, train_dataset_external]
     )
     val = MelanomaDataset(
         df=val_df,
@@ -513,6 +538,7 @@ def train_fit(
 def train_model_cv(
     train_df,
     train_df_2018,
+    train_df_external,
     meta_features,
     config: cli.RunOptions,
     train_transform,
@@ -538,7 +564,9 @@ def train_model_cv(
 
     for fold_idx, (idxT, idxV) in enumerate(splits, 1):
         train_idx = train_df.loc[train_df["fold"].isin(idxT)].index
-        train_idx_2018 = train_df_2018.loc[train_df_2018["fold"].isin(idxT * 2)].index
+        train_idx_2018 = train_df_2018.loc[
+            train_df_2018["fold"].isin(np.concatenate([idxT, idxV]) * 2)
+        ].index
         val_idx = train_df.loc[train_df["fold"].isin(idxV)].index
 
         oof_names.append(train_df.iloc[val_idx]["image_name"].to_numpy())
@@ -562,11 +590,13 @@ def train_model_cv(
 
         train_fit_df = train_df.iloc[train_idx].reset_index(drop=True)
         train_fit_df_2018 = train_df_2018.iloc[train_idx_2018].reset_index(drop=True)
+        train_df_external = train_df_external.reset_index(drop=True)
         val_fit_df = train_df.iloc[val_idx].reset_index(drop=True)
 
         train_result = train_fit(
             train_df=train_fit_df,
             train_df_2018=train_fit_df_2018,
+            train_df_external=train_df_external,
             val_df=val_fit_df,
             train_transform=train_transform,
             tta_transform=tta_transform,
@@ -903,7 +933,9 @@ class IsicModel(pl.LightningModule):
 
 def train_cmd(config: cli.RunOptions):
 
-    train_df, train_df_2019, test_df, meta_features = load_dataset(config)
+    train_df, train_df_2019, train_df_external, test_df, meta_features = load_dataset(
+        config
+    )
 
     if config.dry_run:
         train_df = train_df.head(640)
@@ -931,6 +963,7 @@ def train_cmd(config: cli.RunOptions):
         return train_model_cv(
             train_df=train_df,
             train_df_2018=train_df_2019,
+            train_df_external=train_df_external,
             meta_features=meta_features,
             config=config,
             train_transform=train_transform,
