@@ -420,9 +420,10 @@ def train_fit(
         transforms=train_transform,
         meta_features=meta_features,
     )
-    train_dataset = torch.utils.data.ConcatDataset(
-        [train_dataset_2020, train_dataset_2018, train_dataset_external]
-    )
+    train_dataset_list = [train_dataset_2020, train_dataset_2018]
+    if config.new_external_dataset:
+        train_dataset_list.append(train_dataset_external)
+    train_dataset = torch.utils.data.ConcatDataset(train_dataset_list)
     val = MelanomaDataset(
         df=val_df,
         imfolder=config.dataset_2020() / "train",

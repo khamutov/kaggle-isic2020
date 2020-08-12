@@ -189,6 +189,10 @@ options = [
     RunOption(name="hpo_n_trials", default=10, desc="Number trials for HPO"),
     RunOption(name="hpo_pruning", default=True, desc="Enable/disable pruning").flag(),
     RunOption(name="sched_warmup", default=0.1, desc="warmup percent of all epochs"),
+    RunOption(name="alpha", default=0.7300593232355836, desc="focal loss alpha"),
+    RunOption(
+        name="new_external_dataset", default=True, desc="use new external dataset"
+    ).flag(),
 ]
 
 
@@ -237,6 +241,7 @@ class RunOptions:
         self.sched_warmup = 0.1
         self.alpha = 0.75
         self.gamma = 2.0
+        self.new_external_dataset = True
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
