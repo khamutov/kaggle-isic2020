@@ -560,7 +560,7 @@ def train_model_cv(
         ]
     else:
         skf = KFold(n_splits=FOLDS, shuffle=True, random_state=47)
-        splits = enumerate(skf.split(np.arange(TRAIN_GROUPS)), 1)
+        splits = skf.split(np.arange(TRAIN_GROUPS))
 
     for fold_idx, (idxT, idxV) in enumerate(splits, 1):
         train_idx = train_df.loc[train_df["fold"].isin(idxT)].index

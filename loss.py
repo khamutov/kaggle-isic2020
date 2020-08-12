@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 
 
+# https://github.com/facebookresearch/fvcore/blob/master/fvcore/nn/focal_loss.py
 def sigmoid_focal_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
