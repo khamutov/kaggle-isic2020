@@ -28,7 +28,7 @@ from sklearn.model_selection import KFold
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
-from tqdm.auto import tqdm, trange
+from tqdm.auto import trange
 
 import cli
 from augmentation.hairs import AdvancedHairAugmentation
@@ -343,6 +343,40 @@ class TrainResult:
         pass
 
 
+def find_checkpoint(fold_idx: int, config: cli.RunOptions):
+    pattern = str(Path(config.output_path) / f"model_fold={fold_idx}_epoch=*.ckpt")
+    matched_checkpoints = glob.glob(pattern)
+
+    return matched_checkpoints
+
+
+def assert_no_checkpoint_exists(fold_idx: int, config: cli.RunOptions):
+    matched_checkpoints = find_checkpoint(fold_idx, config)
+    if len(matched_checkpoints) > 0:
+        print(
+            Fore.RED,
+            f"There is already exist a checkpoint for fold {fold_idx} in path {config.output_path}",
+            Style.RESET_ALL,
+        )
+        raise Exception("output path already has model!")
+
+
+def load_checkpoint(fold_idx: int, config: cli.RunOptions):
+    matched_checkpoints = find_checkpoint(fold_idx, config)
+
+    if len(matched_checkpoints) != 1:
+        print(
+            Fore.RED, f"Couldn't find best model for fold {fold_idx}", Style.RESET_ALL,
+        )
+        print(
+            Fore.RED,
+            f"Found {len(matched_checkpoints)} files for this fold",
+            Style.RESET_ALL,
+        )
+        raise Exception("cannot load model from checkpoint")
+    return IsicModel.load_from_checkpoint(checkpoint_path=matched_checkpoints[0])
+
+
 def train_fit(
     train_df,
     train_df_2018,
@@ -432,16 +466,8 @@ def train_fit(
     )
 
     # find model checkpoint for this fold
-    pattern = str(Path(config.output_path) / f"model_fold={fold_idx}_epoch=*.ckpt")
-    matched_checkpoints = glob.glob(pattern)
     if config.train:
-        if len(matched_checkpoints) > 0:
-            print(
-                Fore.RED,
-                f"There is already exist a checkpoint for fold {fold_idx} in path {config.output_path}",
-                Style.RESET_ALL,
-            )
-            raise Exception("output path already has model!")
+        assert_no_checkpoint_exists(fold_idx=fold_idx, config=config)
 
         if config.is_track_mlflow():
             run_id = mlflow.active_run().info.run_id
@@ -456,19 +482,7 @@ def train_fit(
             run_id=run_id,
         )
     else:
-        if len(matched_checkpoints) != 1:
-            print(
-                Fore.RED,
-                f"Couldn't find best model for fold {fold_idx}",
-                Style.RESET_ALL,
-            )
-            print(
-                Fore.RED,
-                f"Found {len(matched_checkpoints)} files for pattern {str(pattern)}",
-                Style.RESET_ALL,
-            )
-            raise Exception("cannot load model from checkpoint")
-        model = IsicModel.load_from_checkpoint(checkpoint_path=matched_checkpoints[0])
+        model = load_checkpoint(fold_idx=fold_idx, config=config)
         run_id = model.run_id  # extract run_id for predictions
 
     if config.hpo:
@@ -667,41 +681,37 @@ def predict_model(
         pin_memory=True,
     )
 
-    preds = torch.zeros((len(test), 1), dtype=torch.float32, device=config.device)
+    preds = torch.zeros(
+        (len(test)), dtype=torch.float32, device=f"cuda:{config.device}"
+    )
     for fold_idx in trange(1, FOLDS + 1, desc="Fold"):
-        model = torch.load(Path(config.output_path) / f"model{fold_idx}.pth")
-        model.eval()  # switch model to the evaluation mode
 
-        fold_preds = torch.zeros(
-            (len(test), 1), dtype=torch.float32, device=config.device
+        model = load_checkpoint(fold_idx=fold_idx, config=config)
+        run_id = model.run_id
+
+        trainer = pl.Trainer(
+            tpu_cores=8 if "TPU_NAME" in os.environ.keys() else None,
+            gpus=config.device,
+            precision=16 if config.device else 32,
+            max_epochs=config.epochs,
+            # distributed_backend='ddp',
+            benchmark=False,
+            deterministic=False,
         )
-        with torch.no_grad():
-            for _ in trange(config.tta, desc="TTA", leave=False):
-                for i, x_test in enumerate(
-                    tqdm(test_loader, desc="Predict", leave=False)
-                ):
-                    x_test[0] = torch.tensor(
-                        x_test[0], device=config.device, dtype=torch.float32
-                    )
-                    x_test[1] = torch.tensor(
-                        x_test[1], device=config.device, dtype=torch.float32
-                    )
-                    z_test = model(x_test[0], x_test[1])
-                    z_test = torch.sigmoid(z_test)
-                    fold_preds[
-                        i * test_loader.batch_size : i * test_loader.batch_size
-                        + x_test[0].shape[0]
-                    ] += z_test
-            fold_preds /= config.tta
+
+        fold_preds = torch.zeros((len(test))).type_as(preds)
+        for _ in trange(config.tta, desc="TTA", leave=False):
+            trainer.test(model=model, test_dataloaders=test_loader)
+
+            fold_preds += torch.load(f"preds_{run_id}.pt")
+            os.remove(f"preds_{run_id}.pt")
+        fold_preds /= config.tta
         preds += fold_preds
 
     preds /= FOLDS
 
     submission = pd.DataFrame(
-        dict(
-            image_name=test_df["image_name"].to_numpy(),
-            target=preds.cpu().numpy()[:, 0],
-        )
+        dict(image_name=test_df["image_name"].to_numpy(), target=preds.cpu().numpy(),)
     )
     submission = submission.sort_values("image_name")
     submission.to_csv("submission.csv", index=False)
