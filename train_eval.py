@@ -945,6 +945,11 @@ class IsicModel(pl.LightningModule):
 
 def train_cmd(config: cli.RunOptions):
 
+    # monkey patch for multiple test runs
+    pl.trainer.distrib_data_parallel.RANDOM_PORTS = pl.trainer.distrib_data_parallel.rng1.randint(
+        10000, 19999, 5000
+    )
+
     train_df, train_df_2019, train_df_external, test_df, meta_features = load_dataset(
         config
     )
