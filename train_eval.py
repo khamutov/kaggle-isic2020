@@ -32,6 +32,7 @@ from tqdm.auto import tqdm, trange
 
 import cli
 from augmentation.hairs import AdvancedHairAugmentation
+from loss import sigmoid_focal_loss
 from utils.seeds import seed_everything
 
 try:
@@ -781,9 +782,14 @@ class IsicModel(pl.LightningModule):
         y_smooth = self.label_smoothing(y)
 
         # CB_loss(y_hat, y, [10000, 1], 2, "focal", 0.9999, 2.0)
-        loss = F.binary_cross_entropy_with_logits(
-            y_hat, y_smooth, pos_weight=torch.tensor(self.config.pos_weight)
+
+        loss = sigmoid_focal_loss(
+            y_hat, y_smooth, self.config.alpha, self.config.gamma, reduction="mean"
         )
+        # loss = focal_loss(y_smooth, y_hat, 0.25, 2.0)
+        # loss = F.binary_cross_entropy_with_logits(
+        #     y_hat, y_smooth, pos_weight=torch.tensor(self.config.pos_weight)
+        # )
 
         return loss, y, y_hat.sigmoid()
 
@@ -911,9 +917,12 @@ def train_cmd(config: cli.RunOptions):
 
         seed = 1253
         if config.hpo:
-            config.learning_rate = trial.suggest_loguniform("lr", 1e-5, 1e-3)
-            config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-4)
-            print("lr", config.learning_rate, "wd", config.weight_decay)
+            # config.learning_rate = trial.suggest_loguniform("lr", 1e-5, 1e-3)
+            # config.weight_decay = trial.suggest_loguniform("wd", 1e-7, 1e-4)
+            # print("lr", config.learning_rate, "wd", config.weight_decay)
+            config.alpha = trial.suggest_uniform("alpha", 0.1, 0.8)
+            config.gamma = trial.suggest_discrete_uniform("gamma", 0.5, 3.0, 0.5)
+            print("alpha", config.alpha, "gamma", config.gamma)
 
         train_transform = get_train_transforms(config)
 

@@ -235,6 +235,8 @@ class RunOptions:
         self.hpo_n_trials = 0
         self.hpo_pruning = True
         self.sched_warmup = 0.1
+        self.alpha = 0.7300593232355836
+        self.gamma = 2.0
         for option in options:
             self.__setattr__(option.name.split("/")[0], option.default)
 
