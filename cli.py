@@ -191,7 +191,7 @@ options = [
     RunOption(name="sched_warmup", default=0.1, desc="warmup percent of all epochs"),
     RunOption(name="alpha", default=0.7300593232355836, desc="focal loss alpha"),
     RunOption(
-        name="new_external_dataset", default=True, desc="use new external dataset"
+        name="new_external_dataset", default=False, desc="use new external dataset"
     ).flag(),
 ]
 
