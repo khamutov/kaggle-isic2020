@@ -654,7 +654,12 @@ def train_model_cv(
 
     # SAVE OOF TO DISK
     df_oof = pd.DataFrame(dict(image_name=names, target=true, pred=oof, fold=folds))
-    df_oof.to_csv("oof.csv", index=False)
+    df_oof.to_csv(Path(config.output_path) / "oof.csv", index=False)
+
+    df_oof_tta = pd.DataFrame(
+        dict(image_name=names, target=true, pred=oof_tta, fold=folds)
+    )
+    df_oof_tta.to_csv(Path(config.output_path) / "oof_tta.csv", index=False)
 
 
 def predict_model(
