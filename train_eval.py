@@ -13,6 +13,7 @@ import numpy as np
 import optuna
 import pandas as pd
 import pytorch_lightning as pl
+import timm
 
 # PyTorch
 import torch
@@ -755,9 +756,12 @@ class IsicModel(pl.LightningModule):
 
         self.no_columns = no_columns
 
-        if "efficientnet" in config.model:
+        if config.model.startswith("efficientnet"):
             self.features = EfficientNet.from_pretrained(config.model)
             self.eff_net_out_features = getattr(self.features, "_fc").in_features
+        elif config.model.startswith("tf_efficientnet"):
+            self.features = timm.create_model(config.model, pretrained=True)
+            self.eff_net_out_features = getattr(self.features, "classifier").in_features
         elif config.model == "resnest50":
             torch.hub.list("zhanghang1989/ResNeSt", force_reload=True)
             # load pretrained models, using ResNeSt-50 as an example
@@ -792,8 +796,10 @@ class IsicModel(pl.LightningModule):
 
     def forward(self, image, csv_data):
         # IMAGE CNN
-        if "efficientnet" in self.config.model:
+        if self.config.model.startswith("efficientnet"):
             image = self.features.extract_features(image)
+        elif self.config.model.startswith("tf_efficientnet"):
+            image = self.features.forward_features(image)
         elif self.config.model == "resnest50":
             image = self.features(image)
 

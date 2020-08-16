@@ -60,6 +60,8 @@ MODEL_EFFICIENTNET_B5 = "efficientnet-b5"
 MODEL_EFFICIENTNET_B6 = "efficientnet-b6"
 MODEL_EFFICIENTNET_B7 = "efficientnet-b7"
 MODEL_RESNEST50 = "resnest50"
+MODEL_EFFICIENTNET_B0_NS = "tf_efficientnet_b0_ns"
+MODEL_EFFICIENTNET_B6_NS = "tf_efficientnet_b6_ns"
 
 batches = {
     256: {
@@ -139,6 +141,8 @@ options = [
             MODEL_EFFICIENTNET_B6,
             MODEL_EFFICIENTNET_B7,
             MODEL_RESNEST50,
+            MODEL_EFFICIENTNET_B0_NS,
+            MODEL_EFFICIENTNET_B6_NS,
         ]
     ),
     RunOption(
